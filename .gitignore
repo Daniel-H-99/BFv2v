@@ -1,0 +1,6 @@
+ckpt/
+log/
+*.pt
+*.mp4
+*.png
+asset/
