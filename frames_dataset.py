@@ -9,10 +9,12 @@ from torch.utils.data import Dataset
 import pandas as pd
 from augmentation import AllAugmentationTransform
 from mesh_augmentation import AllAugmentationWithMeshTransform
+from torchvision import transforms
 import random
 import glob
 from datetime import datetime
 import torch
+import cv2
 
 def read_video(name, frame_shape):
     """
@@ -43,7 +45,7 @@ def read_video(name, frame_shape):
         video_array = video_array.reshape((-1,) + frame_shape)
         video_array = np.moveaxis(video_array, 1, 2)
     elif name.lower().endswith('.gif') or name.lower().endswith('.mp4') or name.lower().endswith('.mov'):
-        video = np.array(mimread(name))
+        video = np.array(mimread(name, memtest=False))
         if len(video.shape) == 3:
             video = np.array([gray2rgb(frame) for frame in video])
         if video.shape[-1] == 4:
@@ -250,12 +252,13 @@ class FramesDataset(Dataset):
             self.transform = None
 
     def __len__(self):
-        return len(self.videos)
+        return len(self.videos) // 1000
 
     def __getitem__(self, idx):
+        idx = (idx + int(datetime.now().timestamp())) % len(self.videos) 
         if self.is_train and self.id_sampling:
             name = self.videos[idx]
-            path = np.random.choice(glob.glob(os.path.join(self.root_dir, name + '*.mp4')))
+            path = np.random.choice(glob.glob(os.path.join(self.root_dir, name)))
         else:
             name = self.videos[idx]
             path = os.path.join(self.root_dir, name)
@@ -266,14 +269,19 @@ class FramesDataset(Dataset):
             frames = os.listdir(path)
             num_frames = len(frames)
             frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2))
-            video_array = [img_as_float32(io.imread(os.path.join(path, frames[idx]))) for idx in frame_idx]
+            video_array = [io.imread(os.path.join(path, frames[(idx + int(datetime.now().timestamp())) % len(num_frames)])) for idx in frame_idx]
         else:
-            video_array = read_video(path, frame_shape=self.frame_shape)
-            num_frames = len(video_array)
+            raw_video_array = read_video(path, frame_shape=self.frame_shape)
+            num_frames = len(raw_video_array)
             frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2)) if self.is_train else range(
                 num_frames)
-            video_array = video_array[frame_idx]
-
+            frames_idx =[((fid + int(datetime.now().timestamp())) % num_frames) for fid in frame_idx]
+            frames_idx[1] = (frames_idx[1] + 100) % num_frames
+            video_array = np.stack([cv2.resize(img_as_float32(raw_video_array[fid]), self.frame_shape[:2]) for fid in frame_idx], axis=0)
+            transform_hopenet =  transforms.Compose([
+                                                    transforms.ToTensor(),
+                                                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+            hopenet_video_array = [transform_hopenet(cv2.resize(raw_video_array[fid], (224, 224))) for fid in frame_idx]
         if self.transform is not None:
             video_array = self.transform(video_array)
 
@@ -284,6 +292,8 @@ class FramesDataset(Dataset):
 
             out['driving'] = driving.transpose((2, 0, 1))
             out['source'] = source.transpose((2, 0, 1))
+            out['hopenet_source'] = hopenet_video_array[0]
+            out['hopenet_driving'] = hopenet_video_array[1]
         else:
             video = np.array(video_array, dtype='float32')
             out['video'] = video.transpose((3, 0, 1, 2))

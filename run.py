@@ -9,7 +9,6 @@ from time import gmtime, strftime
 from shutil import copy
 
 from frames_dataset import FramesDataset
-from frames_dataset import MeshFramesDataset
 
 from modules.generator import OcclusionAwareGenerator, OcclusionAwareSPADEGenerator
 from modules.discriminator import MultiScaleDiscriminator
@@ -23,14 +22,14 @@ if __name__ == "__main__":
     
     if sys.version_info[0] < 3:
         raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
-    os.environ['CUDA_VISIBLE_DEVICES'] = '1,2'
+    os.environ['CUDA_VISIBLE_DEVICES']='1,2'
     parser = ArgumentParser()
-    parser.add_argument("--config", default="config/son-256.yaml", help="path to config")
+    parser.add_argument("--config", default="config/vox-256.yaml", help="path to config")
     parser.add_argument("--mode", default="train", choices=["train",])
-    parser.add_argument("--gen", default="original", choices=["original", "spade"])
+    parser.add_argument("--gen", default="spade", choices=["original", "spade"])
     parser.add_argument("--log_dir", default='log', help="path to log into")
     parser.add_argument("--checkpoint", default=None, help="path to checkpoint to restore")
-    parser.add_argument("--device_ids", default="0,1", type=lambda x: list(map(int, x.split(','))),
+    parser.add_argument("--device_ids", default="0, 1", type=lambda x: list(map(int, x.split(','))),
                         help="Names of the devices comma separated.")
     parser.add_argument("--verbose", dest="verbose", action="store_true", help="Print model architecture")
     parser.set_defaults(verbose=False)
@@ -75,13 +74,13 @@ if __name__ == "__main__":
     if opt.verbose:
         print(kp_detector)
 
-    # he_estimator = HEEstimator(**config['model_params']['he_estimator_params'],
-    #                            **config['model_params']['common_params'])
+    he_estimator = HEEstimator(**config['model_params']['he_estimator_params'],
+                               **config['model_params']['common_params'])
 
-    # if torch.cuda.is_available():
-    #     he_estimator.to(opt.device_ids[0])
+    if torch.cuda.is_available():
+        he_estimator.to(opt.device_ids[0])
 
-    dataset = MeshFramesDataset(is_train=(opt.mode == 'train'), **config['dataset_params'])
+    dataset = FramesDataset(is_train=(opt.mode == 'train'), **config['dataset_params'])
 
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
@@ -90,4 +89,4 @@ if __name__ == "__main__":
 
     if opt.mode == 'train':
         print("Training...")
-        train(config, generator, discriminator, kp_detector, opt.checkpoint, log_dir, dataset, opt.device_ids)
+        train(config, generator, discriminator, kp_detector, he_estimator, opt.checkpoint, log_dir, dataset, opt.device_ids)

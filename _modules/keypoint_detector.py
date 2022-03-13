@@ -173,6 +173,6 @@ class HEEstimator(nn.Module):
         pitch = self.fc_pitch(out)
         roll = self.fc_yaw(out)
         t = self.fc_t(out)
-        exp = self.fc_exp(out)
+        exp = 2 * nn.Sigmoid()(self.fc_exp(out))
 
         return {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 'exp': exp}

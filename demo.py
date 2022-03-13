@@ -22,6 +22,8 @@ from scipy.spatial import ConvexHull
 if sys.version_info[0] < 3:
     raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
 
+os.environ['CUDA_VISIBLE_DEVICES'] = '1,2'
+
 def load_checkpoints(config_path, checkpoint_path, gen, cpu=False):
 
     with open(config_path) as f:
