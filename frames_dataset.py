@@ -252,7 +252,7 @@ class FramesDataset(Dataset):
             self.transform = None
 
     def __len__(self):
-        return len(self.videos) // 1000
+        return len(self.videos) // 100
 
     def __getitem__(self, idx):
         idx = (idx + int(datetime.now().timestamp())) % len(self.videos) 
@@ -278,10 +278,12 @@ class FramesDataset(Dataset):
             frames_idx =[((fid + int(datetime.now().timestamp())) % num_frames) for fid in frame_idx]
             frames_idx[1] = (frames_idx[1] + 100) % num_frames
             video_array = np.stack([cv2.resize(img_as_float32(raw_video_array[fid]), self.frame_shape[:2]) for fid in frame_idx], axis=0)
-            transform_hopenet =  transforms.Compose([
-                                                    transforms.ToTensor(),
-                                                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-            hopenet_video_array = [transform_hopenet(cv2.resize(raw_video_array[fid], (224, 224))) for fid in frame_idx]
+        
+        transform_hopenet =  transforms.Compose([
+                                                transforms.ToTensor(),
+                                                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+        hopenet_video_array = [transform_hopenet(cv2.resize(raw_video_array[fid], (224, 224))) for fid in frame_idx]
+        
         if self.transform is not None:
             video_array = self.transform(video_array)
 

@@ -22,7 +22,7 @@ from scipy.spatial import ConvexHull
 if sys.version_info[0] < 3:
     raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '1,2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 
 def load_checkpoints(config_path, checkpoint_path, gen, cpu=False):
 
@@ -188,6 +188,9 @@ def keypoint_transformation(kp_canonical, he, estimate_jacobian=True, free_view=
 def make_animation(source_image, driving_video, generator, kp_detector, he_estimator, relative=True, adapt_movement_scale=True, estimate_jacobian=True, cpu=False, free_view=False, yaw=0, pitch=0, roll=0):
     with torch.no_grad():
         predictions = []
+        canonical = []
+        exp = []
+        
         source = torch.tensor(source_image[np.newaxis].astype(np.float32)).permute(0, 3, 1, 2)
         if not cpu:
             source = source.cuda()
@@ -212,7 +215,10 @@ def make_animation(source_image, driving_video, generator, kp_detector, he_estim
             out = generator(source, kp_source=kp_source, kp_driving=kp_norm)
 
             predictions.append(np.transpose(out['prediction'].data.cpu().numpy(), [0, 2, 3, 1])[0])
-    return predictions
+            canonical.append(kp_canonical['value'][0].data.cpu())
+            exp.append(kp_driving['value'][0].data.cpu())
+            
+    return {'prediction': predictions, 'kp': {'canonical': canonical, 'exp': exp}}
 
 def find_best_frame(source, driving, cpu=False):
     import face_alignment
@@ -247,6 +253,7 @@ if __name__ == "__main__":
     parser.add_argument("--source_image", default='', help="path to source image")
     parser.add_argument("--driving_video", default='', help="path to driving video")
     parser.add_argument("--result_video", default='', help="path to output")
+    parser.add_argument("--result_dir", default='', help="path to result dir")
 
     parser.add_argument("--gen", default="spade", choices=["original", "spade"])
  
@@ -298,9 +305,15 @@ if __name__ == "__main__":
         print ("Best frame: " + str(i))
         driving_forward = driving_video[i:]
         driving_backward = driving_video[:(i+1)][::-1]
-        predictions_forward = make_animation(source_image, driving_forward, generator, kp_detector, he_estimator, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, estimate_jacobian=estimate_jacobian, cpu=opt.cpu, free_view=opt.free_view, yaw=opt.yaw, pitch=opt.pitch, roll=opt.roll)
-        predictions_backward = make_animation(source_image, driving_backward, generator, kp_detector, he_estimator, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, estimate_jacobian=estimate_jacobian, cpu=opt.cpu, free_view=opt.free_view, yaw=opt.yaw, pitch=opt.pitch, roll=opt.roll)
-        predictions = predictions_backward[::-1] + predictions_forward[1:]
+        output_forward = make_animation(source_image, driving_forward, generator, kp_detector, he_estimator, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, estimate_jacobian=estimate_jacobian, cpu=opt.cpu, free_view=opt.free_view, yaw=opt.yaw, pitch=opt.pitch, roll=opt.roll)
+        output_backward = make_animation(source_image, driving_backward, generator, kp_detector, he_estimator, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, estimate_jacobian=estimate_jacobian, cpu=opt.cpu, free_view=opt.free_view, yaw=opt.yaw, pitch=opt.pitch, roll=opt.roll)
+        predictions = output_backward['prediction'][::-1] + output_forward['prediction'][1:]
+        kps = {k: (output_backward['kp'][k][::-1] + output_backward['kp'][k][1:]) for k in ('canonical', 'exp')}
     else:
-        predictions = make_animation(source_image, driving_video, generator, kp_detector, he_estimator, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, estimate_jacobian=estimate_jacobian, cpu=opt.cpu, free_view=opt.free_view, yaw=opt.yaw, pitch=opt.pitch, roll=opt.roll)
-    imageio.mimsave(opt.result_video, [img_as_ubyte(frame) for frame in predictions], fps=fps)
+        output = make_animation(source_image, driving_video, generator, kp_detector, he_estimator, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, estimate_jacobian=estimate_jacobian, cpu=opt.cpu, free_view=opt.free_view, yaw=opt.yaw, pitch=opt.pitch, roll=opt.roll)
+        predictions = output['prediction']
+        kps = output['kp'] 
+    
+    print(f'result video name: {opt.result_video}')
+    imageio.mimsave(os.path.join(opt.result_dir, 'video', opt.result_video), [img_as_ubyte(frame) for frame in predictions], fps=fps)
+    torch.save(kps, os.path.join(opt.result_dir, 'data', opt.result_video + '.pt'))
