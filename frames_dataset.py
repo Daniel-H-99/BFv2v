@@ -15,6 +15,7 @@ import glob
 from datetime import datetime
 import torch
 import cv2
+from utils.util import extract_mesh
 
 def read_video(name, frame_shape):
     """
@@ -269,7 +270,9 @@ class FramesDataset(Dataset):
             frames = os.listdir(path)
             num_frames = len(frames)
             frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2))
-            video_array = [io.imread(os.path.join(path, frames[(idx + int(datetime.now().timestamp())) % len(num_frames)])) for idx in frame_idx]
+            frame_idx[1] = (frame_idx[1] + 100) % num_frames
+            raw_video_array = [io.imread(os.path.join(path, frames[(idx + int(datetime.now().timestamp())) % len(num_frames)])) for idx in frame_idx]
+            video_array = np.stack([cv2.resize(img_as_float32(raw_video_array[fid]), self.frame_shape[:2]) for fid in frame_idx], axis=0)
         else:
             raw_video_array = read_video(path, frame_shape=self.frame_shape)
             num_frames = len(raw_video_array)
@@ -279,6 +282,7 @@ class FramesDataset(Dataset):
             frames_idx[1] = (frames_idx[1] + 100) % num_frames
             video_array = np.stack([cv2.resize(img_as_float32(raw_video_array[fid]), self.frame_shape[:2]) for fid in frame_idx], axis=0)
         
+        
         transform_hopenet =  transforms.Compose([
                                                 transforms.ToTensor(),
                                                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
@@ -287,19 +291,33 @@ class FramesDataset(Dataset):
         if self.transform is not None:
             video_array = self.transform(video_array)
 
+        meshes = []
+        for frame in video_array:
+            mesh = extract_mesh(frame) # {value (N x 3), R (3 x 3), t(3 x 1), c1}
+            mesh['value'] = np.array(mesh['value'], dtype='float32') / 128 - 1
+            mesh['R'] = np.array(mesh['R'], dtype='float32')
+            mesh['c'] = np.array(mesh['c'], dytpe='float32') * 128
+            t = np.array(mesh['t'], dtype='float32')
+            t = t + np.matmul(R, c * np.ones_like(t))
+            mesh['t'] = t
+            meshes.append(mesh)
+            
+        
         out = {}
         if self.is_train:
             source = np.array(video_array[0], dtype='float32')
             driving = np.array(video_array[1], dtype='float32')
-
             out['driving'] = driving.transpose((2, 0, 1))
             out['source'] = source.transpose((2, 0, 1))
+            out['driving_mesh'] = meshes[1]
+            out['source_mesh'] = meshes[0]
             out['hopenet_source'] = hopenet_video_array[0]
             out['hopenet_driving'] = hopenet_video_array[1]
         else:
             video = np.array(video_array, dtype='float32')
             out['video'] = video.transpose((3, 0, 1, 2))
-
+            out['mesh'] = meshes
+            
         out['name'] = video_name
 
         return out

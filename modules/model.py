@@ -420,16 +420,19 @@ class GeneratorFullModel(torch.nn.Module):
         # kp_canonical_source = self.kp_extractor(x['source'])     # {'value': value, 'jacobian': jacobian}   
         # kp_canonical_driving = self.kp_extractor(x['driving'])     # {'value': value, 'jacobian': jacobian}   
 
-        he_source = self.he_estimator(x['source'])        # {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 's_e': s_e}
-        he_driving = self.he_estimator(x['driving'])      # {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 's_e': s_e}
+        # he_source = self.he_estimator(x['source'])        # {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 's_e': s_e}
+        # he_driving = self.he_estimator(x['driving'])      # {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 's_e': s_e}
 
 
         # driving_224 = x['hopenet_driving']
         # yaw_gt, pitch_gt, roll_gt = self.hopenet(driving_224)
 
         # reg = self.regularize(kp_canonical_source, kp_canonical_driving) # regularizor loss
-
+        mesh_source = x['source_mesh']
+        mesh_driving = x['driving_mesh']
+        
         loss = {}
+        
         x_reg = kp_canonical['value'].flatten(1)
         for x_i in x_reg:
             self.pca_x.register(x_i.detach().cpu())
