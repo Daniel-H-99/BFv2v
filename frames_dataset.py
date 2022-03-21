@@ -1,5 +1,5 @@
 import os
-from skimage import io, img_as_float32
+from skimage import io, img_as_float32, img_as_ubyte
 from skimage.color import gray2rgb
 from sklearn.model_selection import train_test_split
 from imageio import mimread
@@ -225,6 +225,7 @@ class FramesDataset(Dataset):
         self.frame_shape = tuple(frame_shape)
         self.pairs_list = pairs_list
         self.id_sampling = id_sampling
+        self.reference_dict = torch.load('mesh_dict_reference.pt')
         if os.path.exists(os.path.join(root_dir, 'train')):
             assert os.path.exists(os.path.join(root_dir, 'test'))
             print("Use predefined train-test split.")
@@ -253,55 +254,66 @@ class FramesDataset(Dataset):
             self.transform = None
 
     def __len__(self):
-        return len(self.videos) // 100
+        return len(self.videos) // 5
 
     def __getitem__(self, idx):
-        idx = (idx + int(datetime.now().timestamp())) % len(self.videos) 
-        if self.is_train and self.id_sampling:
-            name = self.videos[idx]
-            path = np.random.choice(glob.glob(os.path.join(self.root_dir, name)))
-        else:
-            name = self.videos[idx]
-            path = os.path.join(self.root_dir, name)
+        while True:
+            try:
+                idx = (idx + int(datetime.now().timestamp())) % len(self.videos) 
+                if self.is_train and self.id_sampling:
+                    name = self.videos[idx]
+                    path = np.random.choice(glob.glob(os.path.join(self.root_dir, name)))
+                else:
+                    name = self.videos[idx]
+                    path = os.path.join(self.root_dir, name)
 
-        video_name = os.path.basename(path)
+                video_name = os.path.basename(path)
 
-        if self.is_train and os.path.isdir(path):
-            frames = os.listdir(path)
-            num_frames = len(frames)
-            frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2))
-            frame_idx[1] = (frame_idx[1] + 100) % num_frames
-            raw_video_array = [io.imread(os.path.join(path, frames[(idx + int(datetime.now().timestamp())) % len(num_frames)])) for idx in frame_idx]
-            video_array = np.stack([cv2.resize(img_as_float32(raw_video_array[fid]), self.frame_shape[:2]) for fid in frame_idx], axis=0)
-        else:
-            raw_video_array = read_video(path, frame_shape=self.frame_shape)
-            num_frames = len(raw_video_array)
-            frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2)) if self.is_train else range(
-                num_frames)
-            frames_idx =[((fid + int(datetime.now().timestamp())) % num_frames) for fid in frame_idx]
-            frames_idx[1] = (frames_idx[1] + 100) % num_frames
-            video_array = np.stack([cv2.resize(img_as_float32(raw_video_array[fid]), self.frame_shape[:2]) for fid in frame_idx], axis=0)
-        
-        
-        transform_hopenet =  transforms.Compose([
-                                                transforms.ToTensor(),
-                                                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-        hopenet_video_array = [transform_hopenet(cv2.resize(raw_video_array[fid], (224, 224))) for fid in frame_idx]
-        
-        if self.transform is not None:
-            video_array = self.transform(video_array)
+                if self.is_train and os.path.isdir(path):
+                    frames = os.listdir(path)
+                    num_frames = len(frames)
+                    frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2))
+                    frame_idx[1] = (frame_idx[1] + 100) % num_frames
+                    raw_video_array = [io.imread(os.path.join(path, frames[(idx + int(datetime.now().timestamp())) % num_frames])) for idx in frame_idx]
+                    video_array = np.stack([cv2.resize(img_as_float32(frame), self.frame_shape[:2]) for frame in raw_video_array], axis=0)
+                    transform_hopenet =  transforms.Compose([
+                                                            transforms.ToTensor(),
+                                                            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+                    hopenet_video_array = [transform_hopenet(cv2.resize(frame, (224, 224))) for frame in raw_video_array]
+                    
+                else:
+                    raw_video_array = read_video(path, frame_shape=self.frame_shape)
+                    num_frames = len(raw_video_array)
+                    frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2)) if self.is_train else range(
+                        num_frames)
+                    frames_idx =[((fid + int(datetime.now().timestamp())) % num_frames) for fid in frame_idx]
+                    frames_idx[1] = (frames_idx[1] + 100) % num_frames
+                    video_array = np.stack([cv2.resize(img_as_float32(raw_video_array[fid]), self.frame_shape[:2]) for fid in frame_idx], axis=0)
+                
+                
+                    transform_hopenet =  transforms.Compose([
+                                                            transforms.ToTensor(),
+                                                            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+                    hopenet_video_array = [transform_hopenet(cv2.resize(raw_video_array[fid], (224, 224))) for fid in frame_idx]
+                    
+                if self.transform is not None:
+                    video_array = self.transform(video_array)
 
-        meshes = []
-        for frame in video_array:
-            mesh = extract_mesh(frame) # {value (N x 3), R (3 x 3), t(3 x 1), c1}
-            mesh['value'] = np.array(mesh['value'], dtype='float32') / 128 - 1
-            mesh['R'] = np.array(mesh['R'], dtype='float32')
-            mesh['c'] = np.array(mesh['c'], dytpe='float32') * 128
-            t = np.array(mesh['t'], dtype='float32')
-            t = t + np.matmul(R, c * np.ones_like(t))
-            mesh['t'] = t
-            meshes.append(mesh)
-            
+                meshes = []
+                for frame in video_array:
+                    mesh = extract_mesh(img_as_ubyte(frame), self.reference_dict) # {value (N x 3), R (3 x 3), t(3 x 1), c1}
+                    A = np.array([-1, -1, 1 / 2], dtype='float32')[:, np.newaxis] # 3 x 1
+                    mesh['value'] = np.array(mesh['value'], dtype='float32') / 128 + np.squeeze(A, axis=-1)[None]
+                    mesh['R'] = np.array(mesh['R'], dtype='float32')
+                    mesh['c'] = np.array(mesh['c'], dtype='float32')
+                    t = np.array(mesh['t'], dtype='float32')
+                    mesh['t'] = (np.eye(3).astype(np.float32) - mesh['c'] * mesh['R']) @ A + t / 128
+                    meshes.append(mesh)
+                break
+            except Exception as e:
+                print(f'error: {e}')
+                continue
+                
         
         out = {}
         if self.is_train:

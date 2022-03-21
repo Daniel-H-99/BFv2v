@@ -8,7 +8,7 @@ from skimage.draw import circle
 
 import matplotlib.pyplot as plt
 import collections
-
+from utils.util import draw_section
 
 class Logger:
     def __init__(self, log_dir, checkpoint_freq=100, visualizer_params=None, zfill_num=8, log_file_name='log.txt'):
@@ -48,8 +48,8 @@ class Logger:
             torch.save(cpk, cpk_path)
 
     @staticmethod
-    def load_cpk(checkpoint_path, generator=None, discriminator=None, kp_detector=None, he_estimator=None,
-                 optimizer_generator=None, optimizer_discriminator=None, optimizer_kp_detector=None, optimizer_he_estimator=None):
+    def load_cpk(checkpoint_path, generator=None, discriminator=None, kp_detector=None, he_estimator=None, headmodel=None,
+                 optimizer_generator=None, optimizer_discriminator=None, optimizer_kp_detector=None, optimizer_he_estimator=None, optimizer_headmodel=None):
         checkpoint = torch.load(checkpoint_path)
         if generator is not None:
             generator.load_state_dict(checkpoint['generator'])
@@ -62,6 +62,9 @@ class Logger:
                discriminator.load_state_dict(checkpoint['discriminator'])
             except:
                print ('No discriminator in the state-dict. Dicriminator will be randomly initialized')
+        if headmodel is not None:
+            headmodel.load_state_dict(checkpoint['headmodel'])
+            
         if optimizer_generator is not None:
             optimizer_generator.load_state_dict(checkpoint['optimizer_generator'])
         if optimizer_discriminator is not None:
@@ -73,7 +76,9 @@ class Logger:
             optimizer_kp_detector.load_state_dict(checkpoint['optimizer_kp_detector'])
         if optimizer_he_estimator is not None:
             optimizer_he_estimator.load_state_dict(checkpoint['optimizer_he_estimator'])
-
+        if optimizer_headmodel is not None:
+            optimizer_headmodel.load_state_dict(checkpoint['optimizer_headmodel'])
+            
         return checkpoint['epoch']
 
     def __enter__(self):
@@ -89,18 +94,27 @@ class Logger:
         if self.names is None:
             self.names = list(losses.keys())
         self.loss_list.append(list(losses.values()))
-
-    def log_epoch(self, epoch, models, inp, out):
+        
+    def log(self, log_string):
+        print(log_string, file=self.log_file)
+        self.log_file.flush()
+        
+    def log_epoch(self, epoch, models, inp, out, keyword=None):
         self.epoch = epoch
         self.models = models
         if (self.epoch + 1) % self.checkpoint_freq == 0:
             self.save_cpk()
         self.log_scores(self.names)
+        if keyword is not None:
+            for key in keyword:
+                if key in out:
+                    self.log(f'{key}: {out[key]}')
+
         self.visualize_rec(inp, out)
 
 
 class Visualizer:
-    def __init__(self, kp_size=5, draw_border=False, colormap='gist_rainbow'):
+    def __init__(self, kp_size=1, draw_border=False, colormap='gist_rainbow'):
         self.kp_size = kp_size
         self.draw_border = draw_border
         self.colormap = plt.get_cmap(colormap)
@@ -119,6 +133,11 @@ class Visualizer:
         image_array = np.array([self.draw_image_with_kp(v, k) for v, k in zip(images, kp)])
         return self.create_image_column(image_array)
 
+    def create_image_column_with_section(self, image, section):
+        image_array = np.array([draw_section(sec, img.shape) for img, sec in zip(image, section)]) / 255.0
+        # print(f'image array shape: {image_array.shape}')
+        return self.create_image_column(image_array)
+    
     def create_image_column(self, images):
         if self.draw_border:
             images = np.copy(images)
@@ -130,7 +149,10 @@ class Visualizer:
         out = []
         for arg in args:
             if type(arg) == tuple:
-                out.append(self.create_image_column_with_kp(arg[0], arg[1]))
+                if len(args) == 2:
+                    out.append(self.create_image_column_with_kp(arg[0], arg[1]))
+                else:
+                    out.append(self.create_image_column_with_section(arg[0], arg[1]))
             else:
                 out.append(self.create_image_column(arg))
         return np.concatenate(out, axis=1)
@@ -138,11 +160,17 @@ class Visualizer:
     def visualize(self, driving, source, out):
         images = []
 
+        blank_img = np.transpose(torch.zeros_like(source.data.cpu()), [0, 2, 3, 1])
+        
         # Source image with keypoints
         source = source.data.cpu()
-        kp_source = out['kp_source']['value'][:, :, :2].data.cpu().numpy()     # 3d -> 2d
         source = np.transpose(source, [0, 2, 3, 1])
-        images.append((source, kp_source))
+        
+        if 'kp_source' in out:
+            kp_source = out['kp_source']['value'][:, :, :2].data.cpu().numpy()     # 3d -> 2d
+            images.append((source, kp_source))
+        else:
+            images.append(source)
 
         # Equivariance visualization
         if 'transformed_frame' in out:
@@ -152,15 +180,19 @@ class Visualizer:
             images.append((transformed, transformed_kp))
 
         # Driving image with keypoints
-        kp_driving = out['kp_driving']['value'][:, :, :2].data.cpu().numpy()    # 3d -> 2d
         driving = driving.data.cpu().numpy()
         driving = np.transpose(driving, [0, 2, 3, 1])
-        images.append((driving, kp_driving))
+        if 'kp_driving' in out:
+            kp_driving = out['kp_driving']['value'][:, :, :2].data.cpu().numpy()    # 3d -> 2d
+            images.append((driving, kp_driving))
+        else:
+            images.append(driving)
 
         # Result
-        prediction = out['prediction'].data.cpu().numpy()
-        prediction = np.transpose(prediction, [0, 2, 3, 1])
-        images.append(prediction)
+        if 'prediction' in out:
+            prediction = out['prediction'].data.cpu().numpy()
+            prediction = np.transpose(prediction, [0, 2, 3, 1])
+            images.append(prediction)
 
         ## Occlusion map
         if 'occlusion_map' in out:
@@ -188,7 +220,54 @@ class Visualizer:
                     images.append(mask * color)
                 else:
                     images.append(mask)
+                    
+        if 'raw_source_X' in out:
+            # x: B x N x 3
+            kp_x = (source.shape[1] * (out['raw_source_X']['value'][:, :, :2].data.cpu().numpy() + 1) // 2).astype(np.int32)
+            # print(f'source x shape: {kp_x.shape}')
+            images.append((blank_img, kp_x, None))
 
+        if 'raw_driving_X' in out:
+            # x: B x N x 3
+            kp_x = (source.shape[1] * (out['raw_driving_X']['value'][:, :, :2].data.cpu().numpy() + 1) // 2).astype(np.int32)
+            # print(f'source x shape: {kp_x.shape}')
+            images.append((blank_img, kp_x, None))
+                       
+        if 'source_x' in out:
+            # print(f'source X: {out["source_x"]["value"][:, :, :2]}')
+            # x: B x N x 3
+            kp_x = (source.shape[1] * (out['source_x']['value'][:, :, :2].data.cpu().numpy() + 1) // 2).astype(np.int32)
+            # print(f'source x shape: {kp_x.shape}')
+            images.append((blank_img, kp_x, None))
+
+        if 'driving_x' in out:
+            # x: B x N x 3
+            kp_x = (source.shape[1] * (out['driving_x']['value'][:, :, :2].data.cpu().numpy() + 1) // 2).astype(np.int32)
+            # print(f'source x shape: {kp_x.shape}')
+            images.append((blank_img, kp_x, None))
+
+            
+        if 'source_X' in out:
+            # x: B x N x 3
+            kp_x = (source.shape[1] * (out['source_X']['value'][:, :, :2].data.cpu().numpy() + 1) // 2).astype(np.int32)
+            # print(f'source x shape: {kp_x.shape}')
+            images.append((blank_img, kp_x, None))
+
+            
+        if 'driving_X' in out:
+            # x: B x N x 3
+            kp_x = (source.shape[1] * (out['driving_X']['value'][:, :, :2].data.cpu().numpy() + 1) // 2).astype(np.int32)
+            # print(f'source x shape: {kp_x.shape}')
+            images.append((blank_img, kp_x, None))
+
+            
+        if 'mesh_bias' in out:
+            # x: B x N x 3
+            
+            kp_x = (source.shape[1] * (out['mesh_bias']['value'][:, :, :2].data.cpu().numpy() + 1) // 2).astype(np.int32)
+            # print(f'source x shape: {kp_x.shape}')
+            images.append((blank_img, kp_x, None))
+        
         image = self.create_image_grid(*images)
         image = (255 * image).astype(np.uint8)
         return image

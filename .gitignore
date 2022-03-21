@@ -1,6 +1,6 @@
 *ckpt/
 result/
-log/
+log*/
 *.pt
 *.mp4
 *.png

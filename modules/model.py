@@ -267,27 +267,33 @@ class NonStPCA():
     def register(self, inp):
         # inp: d
         # print(f'self.mu device: {self.mu.device}')
-        inp -= self.mu
+        self.mu = inp
         self.batch.append(inp)
+        inp = inp - self.mu
         self.N += inp.unsqueeze(1) @ inp.unsqueeze(0) @ self.u / self.update_freq
         self.cnt += 1
 
-        if self.cnt >= self.update_freq:
-            print('pca updated')
-            batch = torch.stack(self.batch, dim=0) # B x d
-            mu = batch.mean(dim=0) # d
-            self.mu = (mu + self.mu) / 2
-            batch -= self.mu[None]
-            cov = (batch.unsqueeze(2) @ batch.unsqueeze(1)).mean(dim=0)
-            q, _ = torch.qr(self.N)
-            self.u = q
-            self.s = torch.diag(torch.diag(q.t() @ cov @ q)).sqrt()
-            self.cnt = 0
-            self.steps += 1
+        # if self.cnt >= self.update_freq:
+        #     print(f'pca updated - mu0: {self.mu[0]}')
+        #     batch = torch.stack(self.batch, dim=0) # B x d
+        #     mu = batch.mean(dim=0) # d
+        #     self.mu = mu
+        #     batch -= self.mu[None]
+        #     cov = (batch.unsqueeze(2) @ batch.unsqueeze(1)).mean(dim=0)
+        #     q, _ = torch.qr(self.N)
+        #     self.u = q
+        #     self.s = torch.diag(torch.diag(q.t() @ cov @ q)).sqrt()
+        #     self.cnt = 0
+        #     self.steps += 1
+        #     self.batch = []
 
     def get_state(self, device='cpu'):
         return self.mu.to(device), self.u.to(device), self.s.to(device)
     
+    def load_state(self, mu, u, s):
+        self.mu = mu.cpu()
+        self.u = u.cpu()
+        self.s = s.cpu()
 
 class GeneratorFullModel(torch.nn.Module):
     """
@@ -326,97 +332,176 @@ class GeneratorFullModel(torch.nn.Module):
                 self.hopenet.eval()
 
 
-        self.pca_x = NonStPCA(3 * self.train_params['num_kp'], self.train_params['num_pc'], update_freq=self.train_params['pca_update_freq'])
-        self.pca_e = NonStPCA(3 * self.train_params['num_kp'], self.train_params['num_pc'], update_freq=self.train_params['pca_update_freq'])
+        self.sections = train_params['sections']
+        self.split_ids = [sec[1] for sec in self.sections]
+        self.pca_xs = []
+        self.pca_es = []
+        
+        for i, sec in enumerate(self.sections):
+            self.pca_xs.append(NonStPCA(3 * len(sec[0]), sec[1], update_freq=self.train_params['pca_update_freq']))
+            self.pca_es.append(NonStPCA(3 * len(sec[0]), sec[1], update_freq=self.train_params['pca_update_freq']))
 
-        self.register_buffer('mu_x', torch.Tensor(3 * self.train_params['num_kp']).cuda())
-        self.register_buffer('u_x', torch.Tensor(3 * self.train_params['num_kp'], self.train_params['num_pc']).cuda())
-        self.register_buffer('s_x', torch.Tensor(self.train_params['num_pc'], self.train_params['num_pc']).cuda())
-        self.register_buffer('u_e', torch.Tensor(3 * self.train_params['num_kp'], self.train_params['num_pc']).cuda())
-        self.register_buffer('s_e', torch.Tensor(3 * self.train_params['num_kp'], self.train_params['num_pc']).cuda())
-       
-        self.register_buffer('sigma_err', (torch.eye(3 * self.train_params['num_kp']) * self.train_params['sigma_err']).cuda())
+            self.register_buffer(f'mu_x_{i}', torch.Tensor(3 * len(sec[0])).cuda())
+            self.register_buffer(f'u_x_{i}', torch.Tensor(3 * len(sec[0]), sec[1]).cuda())
+            self.register_buffer(f's_x_{i}', torch.Tensor(sec[1], sec[1]).cuda())
+            self.register_buffer(f'mu_e_{i}', torch.Tensor(3 * len(sec[0])).cuda())
+            self.register_buffer(f'u_e_{i}', torch.Tensor(3 * len(sec[0]), sec[1]).cuda())
+            self.register_buffer(f's_e_{i}', torch.Tensor(3 * len(sec[0]), sec[1]).cuda())
+        
+            self.register_buffer(f'sigma_err_{i}', (torch.eye(3 * len(sec[0])) * self.train_params['sigma_err']).cuda())
 
-
+    def getattr(self, name):
+        return getattr(self, name)
+    
     def update_pc(self):
-        self.mu_x, self.u_x, self.s_x = self.pca_x.get_state()
-        _, self.u_e, self.s_e = self.pca_e.get_state()
+        for i, sec in enumerate(self.sections):
+            mu_x, u_x, s_x = self.pca_xs[i].get_state(device='cuda')
+            mu_e, u_e, s_e = self.pca_es[i].get_state(device='cuda')
+            self.register_buffer(f'mu_x_{i}', mu_x)
+            self.register_buffer(f'u_x_{i}', u_x)
+            self.register_buffer(f's_x_{i}', s_x)
+            self.register_buffer(f'mu_e_{i}', mu_e)
+            self.register_buffer(f'u_e_{i}', u_e)
+            self.register_buffer(f's_e_{i}', s_e)
 
-    def regularize(self, kp_canonical_source, kp_canonical_driving, he_source, he_driving):
-        loss = {}
-        kp_source_normalized = keypoint_normalize(kp_canonical_source, he_source)['value'].flatten(1)   # B x N * 3 
-        kp_driving_normalized = keypoint_normalize(kp_canonical_driving, he_driving)['value'].flatten(1) # B x N * 3
-        # print(f'normalized kp shape: {kp_source_normalized.shape}')
+    def load_pc(self):
+        for i, sec in enumerate(self.sections):
+            self.pca_xs[i].load_state(self.getattr(f'mu_x_{i}'), self.getattr(f'u_x_{i}'), self.getattr(f's_x_{i}'))
+            self.pca_es[i].load_state(self.getattr(f'mu_e_{i}'), self.getattr(f'u_e_{i}'), self.getattr(f's_e_{i}'))
 
-        x = (kp_source_normalized + kp_driving_normalized) / 2
-        e_source = kp_source_normalized - x
+    # def regularize(self, kp_canonical_source, kp_canonical_driving, he_source, he_driving):
+    #     loss = {}
+    #     kp_source_normalized = keypoint_normalize(kp_canonical_source, he_source)['value'].flatten(1)   # B x N * 3 
+    #     kp_driving_normalized = keypoint_normalize(kp_canonical_driving, he_driving)['value'].flatten(1) # B x N * 3
+    #     # print(f'normalized kp shape: {kp_source_normalized.shape}')
+
+    #     x = (kp_source_normalized + kp_driving_normalized) / 2
+    #     e_source = kp_source_normalized - x
 
 
-        k_e_grad = (he_source['exp'] + he_driving['exp']) / 2 # B x num_kp * 3
-        k_e = k_e_grad.detach()
+    #     k_e_grad = (he_source['exp'] + he_driving['exp']) / 2 # B x num_kp * 3
+    #     k_e = k_e_grad.detach()
 
-        loss['k_e'] = torch.norm(he_source['exp'] - he_driving['exp'], dim=1).mean() # 1
+    #     loss['k_e'] = torch.norm(he_source['exp'] - he_driving['exp'], dim=1).mean() # 1
         
-        x = x.detach().cpu()
-        e = math.sqrt(2) * e_source.detach().cpu() / k_e.cpu().clamp(1e-1)
+    #     x = x.detach().cpu()
+    #     e = math.sqrt(2) * e_source.detach().cpu() / k_e.cpu().clamp(1e-1)
 
-        for x_i in x:
-            self.pca_x.register(x_i)
-        for e_i in e:
-            self.pca_e.register(e_i)
+    #     for x_i in x:
+    #         self.pca_x.register(x_i)
+    #     for e_i in e:
+    #         self.pca_e.register(e_i)
 
-        self.update_pc()
+    #     self.update_pc()
 
-        mu_x, u_x, s_x = self.pca_x.get_state(device='cuda')
-        _, u_e, s_e = self.pca_e.get_state(device='cuda')
+    #     mu_x, u_x, s_x = self.pca_x.get_state(device='cuda')
+    #     _, u_e, s_e = self.pca_e.get_state(device='cuda')
 
 
-        print('regularizing')
-        loss['regularizor'] = ((kp_source_normalized - mu_x[None]).unsqueeze(1) @ ((u_x @ (s_x ** 2) @ u_x.t())[None] + torch.diag_embed(k_e) @ u_e @ (s_e ** 2) @ u_e.t() @ torch.diag_embed(k_e) + self.sigma_err[None]).inverse() @ (kp_source_normalized - mu_x[None]).unsqueeze(2)).mean() # 1
-        print(f'loss reg: {loss["regularizor"]}')
+    #     print('regularizing')
+    #     loss['regularizor'] = ((kp_source_normalized - mu_x[None]).unsqueeze(1) @ ((u_x @ (s_x ** 2) @ u_x.t())[None] + torch.diag_embed(k_e) @ u_e @ (s_e ** 2) @ u_e.t() @ torch.diag_embed(k_e) + self.sigma_err[None]).inverse() @ (kp_source_normalized - mu_x[None]).unsqueeze(2)).mean() # 1
+    #     print(f'loss reg: {loss["regularizor"]}')
 
-        u_e = torch.diag_embed(k_e_grad) @ u_e # B x 3 * num_kp x num_pc
+    #     u_e = torch.diag_embed(k_e_grad) @ u_e # B x 3 * num_kp x num_pc
 
-        A = (torch.eye(self.train_params['num_pc']).cuda() + (u_x @ s_x).t() @ self.sigma_err.inverse() @ (u_x @ s_x))[None].repeat(len(x), 1, 1)  # B x num_pc x num_pc
-        B = (u_e @ s_e).transpose(1, 2) @ self.sigma_err.inverse() @ (u_e @ s_e) # B x num_pc x num_pc
-        C = (u_x @ s_x).t() @ self.sigma_err.inverse() @ (kp_source_normalized - mu_x[None]).unsqueeze(-1) # B x num_pc x num_pc
-        A_ = (u_x @ s_x).t() @ self.sigma_err.inverse() @ (u_e @ s_e) # B x num_pc x num_pc
-        B_ = torch.eye(self.train_params['num_pc']).cuda()[None] + (u_e @ s_e).transpose(1, 2) @ self.sigma_err.inverse() @ (u_e @ s_e)   # B x num_pc x num_pc
-        C_ = (u_e @ s_e).transpose(1, 2) @ self.sigma_err.inverse() @ (kp_source_normalized - mu_x[None]).unsqueeze(-1)  # B x num_pc x num_pc
+    #     A = (torch.eye(self.train_params['num_pc']).cuda() + (u_x @ s_x).t() @ self.sigma_err.inverse() @ (u_x @ s_x))[None].repeat(len(x), 1, 1)  # B x num_pc x num_pc
+    #     B = (u_e @ s_e).transpose(1, 2) @ self.sigma_err.inverse() @ (u_e @ s_e) # B x num_pc x num_pc
+    #     C = (u_x @ s_x).t() @ self.sigma_err.inverse() @ (kp_source_normalized - mu_x[None]).unsqueeze(-1) # B x num_pc x num_pc
+    #     A_ = (u_x @ s_x).t() @ self.sigma_err.inverse() @ (u_e @ s_e) # B x num_pc x num_pc
+    #     B_ = torch.eye(self.train_params['num_pc']).cuda()[None] + (u_e @ s_e).transpose(1, 2) @ self.sigma_err.inverse() @ (u_e @ s_e)   # B x num_pc x num_pc
+    #     C_ = (u_e @ s_e).transpose(1, 2) @ self.sigma_err.inverse() @ (kp_source_normalized - mu_x[None]).unsqueeze(-1)  # B x num_pc x num_pc
 
-        M = torch.cat([torch.cat([A, B], dim=2), torch.cat([A_, B_], dim=2)], dim=1) # B x (2 * num_pc) x (2 * num_pc)
-        N = torch.cat([C, C_], dim=1) # B x (2 * num_pc) x 1
-        z_estimated = M.inverse() @ N # B x (2 * num_pc) x 1
-        z_x_estimated, z_e_estimated = z_estimated.split(self.train_params['num_pc'], dim=1) # B x num_pc x 1
-        kp_source_reg = mu_x.unsqueeze(0).unsqueeze(-1) + u_x @ s_x @ z_x_estimated + u_e @ s_e @ z_e_estimated # B x num_kp * 3 x 1
-        kp_source_reg = kp_source_reg.squeeze(2).view(kp_source_reg.size(0), -1, 3) # B x num_kp x 3
+    #     M = torch.cat([torch.cat([A, B], dim=2), torch.cat([A_, B_], dim=2)], dim=1) # B x (2 * num_pc) x (2 * num_pc)
+    #     N = torch.cat([C, C_], dim=1) # B x (2 * num_pc) x 1
+    #     z_estimated = M.inverse() @ N # B x (2 * num_pc) x 1
+    #     z_x_estimated, z_e_estimated = z_estimated.split(self.train_params['num_pc'], dim=1) # B x num_pc x 1
+    #     kp_source_reg = mu_x.unsqueeze(0).unsqueeze(-1) + u_x @ s_x @ z_x_estimated + u_e @ s_e @ z_e_estimated # B x num_kp * 3 x 1
+    #     kp_source_reg = kp_source_reg.squeeze(2).view(kp_source_reg.size(0), -1, 3) # B x num_kp x 3
 
-        A = (torch.eye(self.train_params['num_pc']).cuda() + (u_x @ s_x).t() @ self.sigma_err.inverse() @ (u_x @ s_x))[None].repeat(len(x), 1, 1)  # B x num_pc x num_pc
-        B = (u_e @ s_e).transpose(1, 2) @ self.sigma_err.inverse() @ (u_e @ s_e) # B x num_pc x num_pc
-        C = (u_x @ s_x).t() @ self.sigma_err.inverse() @ (kp_driving_normalized - mu_x[None]).unsqueeze(-1) # B x num_pc x num_pc
-        A_ = (u_x @ s_x).t() @ self.sigma_err.inverse() @ (u_e @ s_e) # B x num_pc x num_pc
-        B_ = torch.eye(self.train_params['num_pc']).cuda()[None] + (u_e @ s_e).transpose(1, 2) @ self.sigma_err.inverse() @ (u_e @ s_e)   # B x num_pc x num_pc
-        C_ = (u_e @ s_e).transpose(1, 2) @ self.sigma_err.inverse() @ (kp_driving_normalized - mu_x[None]).unsqueeze(-1)  # B x num_pc x num_pc
+    #     A = (torch.eye(self.train_params['num_pc']).cuda() + (u_x @ s_x).t() @ self.sigma_err.inverse() @ (u_x @ s_x))[None].repeat(len(x), 1, 1)  # B x num_pc x num_pc
+    #     B = (u_e @ s_e).transpose(1, 2) @ self.sigma_err.inverse() @ (u_e @ s_e) # B x num_pc x num_pc
+    #     C = (u_x @ s_x).t() @ self.sigma_err.inverse() @ (kp_driving_normalized - mu_x[None]).unsqueeze(-1) # B x num_pc x num_pc
+    #     A_ = (u_x @ s_x).t() @ self.sigma_err.inverse() @ (u_e @ s_e) # B x num_pc x num_pc
+    #     B_ = torch.eye(self.train_params['num_pc']).cuda()[None] + (u_e @ s_e).transpose(1, 2) @ self.sigma_err.inverse() @ (u_e @ s_e)   # B x num_pc x num_pc
+    #     C_ = (u_e @ s_e).transpose(1, 2) @ self.sigma_err.inverse() @ (kp_driving_normalized - mu_x[None]).unsqueeze(-1)  # B x num_pc x num_pc
 
-        M = torch.cat([torch.cat([A, B], dim=2), torch.cat([A_, B_], dim=2)], dim=1) # B x (2 * num_pc) x (2 * num_pc)
-        N = torch.cat([C, C_], dim=1) # B x (2 * num_pc) x 1
-        z_estimated = M.inverse() @ N # B x (2 * num_pc) x 1
-        z_x_estimated, z_e_estimated = z_estimated.split(self.train_params['num_pc'], dim=1) # B x num_pc x 1
-        kp_driving_reg = mu_x.unsqueeze(0).unsqueeze(-1) + u_x @ s_x @ z_x_estimated + u_e @ s_e @ z_e_estimated # B x num_kp * 3 x 1
-        kp_driving_reg = kp_driving_reg.squeeze(2).view(kp_driving_reg.size(0), -1, 3) # B x num_kp x 3
+    #     M = torch.cat([torch.cat([A, B], dim=2), torch.cat([A_, B_], dim=2)], dim=1) # B x (2 * num_pc) x (2 * num_pc)
+    #     N = torch.cat([C, C_], dim=1) # B x (2 * num_pc) x 1
+    #     z_estimated = M.inverse() @ N # B x (2 * num_pc) x 1
+    #     z_x_estimated, z_e_estimated = z_estimated.split(self.train_params['num_pc'], dim=1) # B x num_pc x 1
+    #     kp_driving_reg = mu_x.unsqueeze(0).unsqueeze(-1) + u_x @ s_x @ z_x_estimated + u_e @ s_e @ z_e_estimated # B x num_kp * 3 x 1
+    #     kp_driving_reg = kp_driving_reg.squeeze(2).view(kp_driving_reg.size(0), -1, 3) # B x num_kp x 3
 
-        kp_source_reg = {'value': kp_source_reg, 'jacobian': None}
-        kp_driving_reg = {'value': kp_driving_reg, 'jacobian': None}
+    #     kp_source_reg = {'value': kp_source_reg, 'jacobian': None}
+    #     kp_driving_reg = {'value': kp_driving_reg, 'jacobian': None}
 
-        kp_source_reg = keypoint_transformation(kp_source_reg, he_source)
-        kp_driving_reg = keypoint_transformation(kp_driving_reg, he_driving)
+    #     kp_source_reg = keypoint_transformation(kp_source_reg, he_source)
+    #     kp_driving_reg = keypoint_transformation(kp_driving_reg, he_driving)
         
-        res = {'kp_source': kp_source_reg, 'kp_driving': kp_driving_reg, 'loss': loss}
+    #     res = {'kp_source': kp_source_reg, 'kp_driving': kp_driving_reg, 'loss': loss}
 
+    #     return res
+
+    def split_section(self, X):
+        res = []
+        for i, sec in enumerate(self.sections):
+            res.append(X[:, sec[0]])
         return res
+    
+    def register_keypoint(self, kp_source, kp_driving):
+        X_source = kp_source['value']
+        X_driving = kp_driving['value']
+
+        X_source_splitted = self.split_section(X_source)
+        X_driving_splitted = self.split_section(X_driving)
+        
+        for i, sec in enumerate(self.sections):
+            x = (X_source_splitted[i] + X_driving_splitted[i]) / 2
+            x = X_source_splitted[i]
+            e = X_source_splitted[i] - x
+            
+            x = x.flatten(1).detach().cpu()
+            e = math.sqrt(2) * e.flatten(1).detach().cpu()
+
+            for x_i in x:
+                self.pca_xs[i].register(x_i)
+            for e_i in e:
+                self.pca_es[i].register(e_i)
+                
+        self.update_pc()
+        
+    def calc_reg_loss(self, xs, es):
+        # xs, es: (num_section) x N_i * 3
+        loss_reg = 0
+        
+        for i, sec in enumerate(self.sections):
+            x, e = xs[i], es[i]
+            mu_x, u_x, s_x = self.pca_xs[i].get_state(device='cuda')
+            mu_e, u_e, s_e = self.pca_es[i].get_state(device='cuda')
+            sigma_err = self.getattr(f'sigma_err_{i}')
+            loss_reg_x = ((x - mu_x[None]).unsqueeze(1) @ ((u_x @ (s_x ** 2) @ u_x.t())[None] + sigma_err[None]).inverse() @ (x - mu_x[None]).unsqueeze(2)).mean() # 1
+            loss_reg_e = (e.unsqueeze(1) @ ((u_e @ (s_e ** 2) @ u_e.t())[None] + sigma_err[None]).inverse() @ e.unsqueeze(2)).mean() # 1
+            
+            loss_reg += (loss_reg_x + loss_reg_e)
+        
+        return loss_reg
+    
+    def calc_seg_loss(self, mask, heatmap):
+        # heatmap: B x num_section x d x h x w
+        # mask: B x (num_kp + 1) x d x h x w
+        split_ids = [2]
+        split_ids.extend(self.split_ids)
+        seg_mask = torch.split(mask, split_ids, dim=1) # []: (num_section + 1) x B x -1 x d x h x w
+        seg_mask = seg_mask[1:]
+        seg_loss = 0
+        for i in range(heatmap.size(1)):
+            seg = seg_mask[i].sum(dim=1)
+            seg_loss += ((1 - heatmap[:, [i]]) * seg_mask[i]).mean()
+        
+        return seg_loss
 
     def forward(self, x):
-        kp_canonical = self.kp_extractor(x['source'])     # {'value': value, 'jacobian': jacobian}   
+        # kp_canonical = self.kp_extractor(x['source'])     # {'value': value, 'jacobian': jacobian}   
         # kp_canonical_source = self.kp_extractor(x['source'])     # {'value': value, 'jacobian': jacobian}   
         # kp_canonical_driving = self.kp_extractor(x['driving'])     # {'value': value, 'jacobian': jacobian}   
 
@@ -428,21 +513,21 @@ class GeneratorFullModel(torch.nn.Module):
         # yaw_gt, pitch_gt, roll_gt = self.hopenet(driving_224)
 
         # reg = self.regularize(kp_canonical_source, kp_canonical_driving) # regularizor loss
-        mesh_source = x['source_mesh']
-        mesh_driving = x['driving_mesh']
+
+        loss_values = {}
         
-        loss = {}
+        bs = len(x['source_mesh']['value'])
         
-        x_reg = kp_canonical['value'].flatten(1)
-        for x_i in x_reg:
-            self.pca_x.register(x_i.detach().cpu())
-        if self.pca_x.steps > 2:
-            mu_x, u_x, s_x = self.pca_x.get_state(device='cuda')
-            loss_reg = ((x_reg - mu_x[None]).unsqueeze(1) @ ((u_x @ (s_x ** 2) @ u_x.t())[None] + self.sigma_err[None]).inverse() @ (x_reg - mu_x[None]).unsqueeze(2)).mean() # 1
-            loss['regularizor'] = self.loss_weights['regularizor'] * loss_reg
-            self.mu_x, self.u_x, self.s_x = self.pca_x.get_state()
-        else:
-            loss['regularizor'] = self.loss_weights['regularizor'] * torch.zeros(1).cuda().mean()
+        # x_reg = kp_canonical['value'].flatten(1)
+        # for x_i in x_reg:
+        #     self.pca_x.register(x_i.detach().cpu())
+        # if self.pca_x.steps > 2:
+        #     mu_x, u_x, s_x = self.pca_x.get_state(device='cuda')
+        #     loss_reg = ((x_reg - mu_x[None]).unsqueeze(1) @ ((u_x @ (s_x ** 2) @ u_x.t())[None] + self.sigma_err[None]).inverse() @ (x_reg - mu_x[None]).unsqueeze(2)).mean() # 1
+        #     loss['regularizor'] = self.loss_weights['regularizor'] * loss_reg
+        #     self.mu_x, self.u_x, self.s_x = self.pca_x.get_state()
+        # else:
+        #     loss['regularizor'] = self.loss_weights['regularizor'] * torch.zeros(1).cuda().mean()
 
         # if self.pca_x.steps * self.pca_e.steps > 0:
         #     kp_source, kp_driving = reg['kp_source'], reg['kp_driving']
@@ -453,14 +538,36 @@ class GeneratorFullModel(torch.nn.Module):
 
 
         # {'value': value, 'jacobian': jacobian}
-        kp_source = keypoint_transformation(kp_canonical, he_source, self.estimate_jacobian)
-        kp_driving = keypoint_transformation(kp_canonical, he_driving, self.estimate_jacobian)
- 
+        # kp_source = keypoint_transformation(kp_canonical, he_source, self.estimate_jacobian)
+        # kp_driving = keypoint_transformation(kp_canonical, he_driving, self.estimate_jacobian)
+        kp_source = x['source_mesh']
+        kp_driving = x['driving_mesh']
+        
+        self.register_keypoint(kp_source, kp_driving)
 
+        
+        kp_source['mesh_bias'] = [self.getattr(f'mu_x_{i}') for i in range(len(self.sections))]
+        kp_driving['mesh_bias'] = [self.getattr(f'mu_x_{i}') for i in range(len(self.sections))]
+        
         generated = self.generator(x['source'], kp_source=kp_source, kp_driving=kp_driving)
-        generated.update({'kp_source': kp_source['neutralized'], 'kp_driving': kp_driving})
+        
+        x_recon = torch.cat(kp_source['x'], dim=1).view(bs, -1, 3) # B x num_raw_point x 3
+        x_recon = torch.cat(self.split_section(kp_source['value']), dim=1)
 
-        loss_values = loss
+        e_source_recon = torch.cat(kp_source['e'], dim=1).view(bs, -1, 3)
+        
+        e_driving_recon = torch.cat(kp_driving['e'], dim=1).view(bs, -1, 3)
+        X_source_recon = x_recon + e_source_recon
+        X_driving_recon = x_recon + e_driving_recon
+        
+        mesh_bias = torch.cat([self.getattr(f'mu_x_{i}') for i in range(len(self.sections))], dim=0).view(1, -1, 3).repeat(bs, 1, 1)
+        generated.update({'mesh_bias': {'value': mesh_bias}, 'x': {'value': x_recon}, 'kp_source': {'value': X_source_recon}, 'kp_driving': {'value': X_driving_recon}})
+        
+        reg_loss = self.calc_reg_loss(generated['x_source'], generated['e_source'])
+        seg_loss = self.calc_seg_loss(generated['mask'], generated['heatmap'])
+        
+        loss_values['regularizor'] = self.loss_weights['regularizor'] * reg_loss
+        loss_values['segmentation'] = self.loss_weights['segmentation'] * seg_loss
 
         pyramide_real = self.pyramid(x['driving'])
         pyramide_generated = self.pyramid(generated['prediction'])

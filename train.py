@@ -19,12 +19,13 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
 
     optimizer_generator = torch.optim.Adam(generator.parameters(), lr=train_params['lr_generator'], betas=(0.5, 0.999))
     optimizer_discriminator = torch.optim.Adam(discriminator.parameters(), lr=train_params['lr_discriminator'], betas=(0.5, 0.999))
-    optimizer_kp_detector = torch.optim.Adam(kp_detector.parameters(), lr=train_params['lr_kp_detector'], betas=(0.5, 0.999))
-    optimizer_he_estimator = torch.optim.Adam(he_estimator.parameters(), lr=train_params['lr_he_estimator'], betas=(0.5, 0.999))
+    # optimizer_kp_detector = torch.optim.Adam(kp_detector.parameters(), lr=train_params['lr_kp_detector'], betas=(0.5, 0.999))
+    # optimizer_he_estimator = torch.optim.Adam(he_estimator.parameters(), lr=train_params['lr_he_estimator'], betas=(0.5, 0.999))
 
     if checkpoint is not None:
-        start_epoch = Logger.load_cpk(checkpoint, generator, discriminator, kp_detector, he_estimator,
+        start_epoch = Logger.load_cpk(checkpoint, generator, discriminator, None, None,
                                       optimizer_generator, optimizer_discriminator, optimizer_kp_detector, optimizer_he_estimator)
+        generator.dense_motion_network.load_state()
     else:
         start_epoch = 0
 
@@ -32,10 +33,10 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
                                       last_epoch=start_epoch - 1)
     scheduler_discriminator = MultiStepLR(optimizer_discriminator, train_params['epoch_milestones'], gamma=0.1,
                                           last_epoch=start_epoch - 1)
-    scheduler_kp_detector = MultiStepLR(optimizer_kp_detector, train_params['epoch_milestones'], gamma=0.1,
-                                        last_epoch=-1 + start_epoch * (train_params['lr_kp_detector'] != 0))
-    scheduler_he_estimator = MultiStepLR(optimizer_he_estimator, train_params['epoch_milestones'], gamma=0.1,
-                                        last_epoch=-1 + start_epoch * (train_params['lr_kp_detector'] != 0))
+    # scheduler_kp_detector = MultiStepLR(optimizer_kp_detector, train_params['epoch_milestones'], gamma=0.1,
+    #                                     last_epoch=-1 + start_epoch * (train_params['lr_kp_detector'] != 0))
+    # scheduler_he_estimator = MultiStepLR(optimizer_he_estimator, train_params['epoch_milestones'], gamma=0.1,
+    #                                     last_epoch=-1 + start_epoch * (train_params['lr_kp_detector'] != 0))
 
     if 'num_repeats' in train_params or train_params['num_repeats'] != 1:
         dataset = DatasetRepeater(dataset, train_params['num_repeats'])
@@ -48,8 +49,15 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
         generator_full = DataParallelWithCallback(generator_full, device_ids=device_ids)
         discriminator_full = DataParallelWithCallback(discriminator_full, device_ids=device_ids)
 
+
+    regularizor_weight_0 = train_params['loss_weights']['regularizor']
+    
     with Logger(log_dir=log_dir, visualizer_params=config['visualizer_params'], checkpoint_freq=train_params['checkpoint_freq']) as logger:
         for epoch in trange(start_epoch, train_params['num_epochs']):
+            if epoch < 1:
+                train_params['loss_weights']['regularizor'] = 0
+            else:
+                train_params['loss_weights']['regularizor'] = regularizor_weight_0
             for x in tqdm(dataloader):
                 losses_generator, generated = generator_full(x)
 
@@ -59,10 +67,10 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
                 loss.backward()
                 optimizer_generator.step()
                 optimizer_generator.zero_grad()
-                optimizer_kp_detector.step()
-                optimizer_kp_detector.zero_grad()
-                optimizer_he_estimator.step()
-                optimizer_he_estimator.zero_grad()
+                # optimizer_kp_detector.step()
+                # optimizer_kp_detector.zero_grad()
+                # optimizer_he_estimator.step()
+                # optimizer_he_estimator.zero_grad()
 
                 if train_params['loss_weights']['generator_gan'] != 0:
                     optimizer_discriminator.zero_grad()
@@ -83,14 +91,10 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
 
             scheduler_generator.step()
             scheduler_discriminator.step()
-            scheduler_kp_detector.step()
-            scheduler_he_estimator.step()
+            # scheduler_kp_detector.step()
+            # scheduler_he_estimator.step()
             
             logger.log_epoch(epoch, {'generator': generator,
                                      'discriminator': discriminator,
-                                     'kp_detector': kp_detector,
-                                     'he_estimator': he_estimator,
                                      'optimizer_generator': optimizer_generator,
-                                     'optimizer_discriminator': optimizer_discriminator,
-                                     'optimizer_kp_detector': optimizer_kp_detector,
-                                     'optimizer_he_estimator': optimizer_he_estimator}, inp=x, out=generated)
+                                     'optimizer_discriminator': optimizer_discriminator,}, inp=x, out=generated)

@@ -160,12 +160,15 @@ class SPADEDecoder(nn.Module):
 
 class OcclusionAwareSPADEGenerator(nn.Module):
 
-    def __init__(self, image_channel, feature_channel, num_kp, block_expansion, max_features, num_down_blocks, reshape_channel, reshape_depth,
+    def __init__(self, image_channel, feature_channel, num_kp, sections, block_expansion, max_features, num_down_blocks, reshape_channel, reshape_depth,
                  num_resblocks, estimate_occlusion_map=False, dense_motion_params=None, estimate_jacobian=False):
         super(OcclusionAwareSPADEGenerator, self).__init__()
 
+        self.sections = sections
+        # assert sum(sections) == num_kp - 1
+        
         if dense_motion_params is not None:
-            self.dense_motion_network = DenseMotionNetwork(num_kp=num_kp, feature_channel=feature_channel,
+            self.dense_motion_network = DenseMotionNetwork(num_kp=num_kp, sections=sections, feature_channel=feature_channel,
                                                            estimate_occlusion_map=estimate_occlusion_map,
                                                            **dense_motion_params)
         else:
@@ -224,7 +227,9 @@ class OcclusionAwareSPADEGenerator(nn.Module):
             dense_motion = self.dense_motion_network(feature=feature_3d, kp_driving=kp_driving,
                                                      kp_source=kp_source)
             output_dict['mask'] = dense_motion['mask']
-
+            output_dict['x_source'] = dense_motion['x_source']
+            output_dict['e_source'] = dense_motion['e_source']
+            output_dict['heatmap'] = dense_motion['heatmap']
             if 'occlusion_map' in dense_motion:
                 occlusion_map = dense_motion['occlusion_map']
                 output_dict['occlusion_map'] = occlusion_map

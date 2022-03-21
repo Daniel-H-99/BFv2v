@@ -17,19 +17,22 @@ from modules.keypoint_detector import KPDetector, HEEstimator
 import torch
 
 from train import train
+import warnings
+
+warnings.filterwarnings(action='ignore')
 
 if __name__ == "__main__":
     
     if sys.version_info[0] < 3:
         raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
-    os.environ['CUDA_VISIBLE_DEVICES']='1,2'
+    os.environ['CUDA_VISIBLE_DEVICES']='1,2,3'
     parser = ArgumentParser()
     parser.add_argument("--config", default="config/vox-256.yaml", help="path to config")
     parser.add_argument("--mode", default="train", choices=["train",])
     parser.add_argument("--gen", default="spade", choices=["original", "spade"])
     parser.add_argument("--log_dir", default='log', help="path to log into")
     parser.add_argument("--checkpoint", default=None, help="path to checkpoint to restore")
-    parser.add_argument("--device_ids", default="0, 1", type=lambda x: list(map(int, x.split(','))),
+    parser.add_argument("--device_ids", default="0,1,2", type=lambda x: list(map(int, x.split(','))),
                         help="Names of the devices comma separated.")
     parser.add_argument("--verbose", dest="verbose", action="store_true", help="Print model architecture")
     parser.set_defaults(verbose=False)
@@ -38,6 +41,10 @@ if __name__ == "__main__":
     with open(opt.config) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
 
+    if opt.mode == 'train':
+        config['train_params']['num_kp'] = config['model_params']['common_params']['num_kp']
+        config['train_params']['sections'] = config['model_params']['common_params']['sections']
+        
     if opt.checkpoint is not None:
         log_dir = os.path.join(*os.path.split(opt.checkpoint)[:-1])
     else:
@@ -65,20 +72,20 @@ if __name__ == "__main__":
     if opt.verbose:
         print(discriminator)
 
-    kp_detector = KPDetector(**config['model_params']['kp_detector_params'],
-                             **config['model_params']['common_params'])
+    # kp_detector = KPDetector(**config['model_params']['kp_detector_params'],
+    #                          **config['model_params']['common_params'])
 
-    if torch.cuda.is_available():
-        kp_detector.to(opt.device_ids[0])
+    # if torch.cuda.is_available():
+    #     kp_detector.to(opt.device_ids[0])
 
-    if opt.verbose:
-        print(kp_detector)
+    # if opt.verbose:
+    #     print(kp_detector)
 
-    he_estimator = HEEstimator(**config['model_params']['he_estimator_params'],
-                               **config['model_params']['common_params'])
+    # he_estimator = HEEstimator(**config['model_params']['he_estimator_params'],
+    #                            **config['model_params']['common_params'])
 
-    if torch.cuda.is_available():
-        he_estimator.to(opt.device_ids[0])
+    # if torch.cuda.is_available():
+    #     he_estimator.to(opt.device_ids[0])
 
     dataset = FramesDataset(is_train=(opt.mode == 'train'), **config['dataset_params'])
 
@@ -89,4 +96,4 @@ if __name__ == "__main__":
 
     if opt.mode == 'train':
         print("Training...")
-        train(config, generator, discriminator, kp_detector, he_estimator, opt.checkpoint, log_dir, dataset, opt.device_ids)
+        train(config, generator, discriminator, None, None, opt.checkpoint, log_dir, dataset, opt.device_ids)
