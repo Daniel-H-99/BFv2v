@@ -23,9 +23,9 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
     # optimizer_he_estimator = torch.optim.Adam(he_estimator.parameters(), lr=train_params['lr_he_estimator'], betas=(0.5, 0.999))
 
     if checkpoint is not None:
-        start_epoch = Logger.load_cpk(checkpoint, generator, discriminator, None, None,
-                                      optimizer_generator, optimizer_discriminator, optimizer_kp_detector, optimizer_he_estimator)
-        generator.dense_motion_network.load_state()
+        start_epoch = Logger.load_cpk(checkpoint, generator, discriminator, None, None, None, 
+                                      optimizer_generator, optimizer_discriminator)
+        # generator.dense_motion_network.load_state()
     else:
         start_epoch = 0
 
@@ -93,7 +93,7 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
             scheduler_discriminator.step()
             # scheduler_kp_detector.step()
             # scheduler_he_estimator.step()
-            
+            print(f'generated keys: {generated.keys()}')
             logger.log_epoch(epoch, {'generator': generator,
                                      'discriminator': discriminator,
                                      'optimizer_generator': optimizer_generator,

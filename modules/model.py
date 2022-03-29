@@ -266,26 +266,22 @@ class NonStPCA():
 
     def register(self, inp):
         # inp: d
-        # print(f'self.mu device: {self.mu.device}')
-        self.mu = inp
-        self.batch.append(inp)
-        inp = inp - self.mu
-        self.N += inp.unsqueeze(1) @ inp.unsqueeze(0) @ self.u / self.update_freq
-        self.cnt += 1
-
-        # if self.cnt >= self.update_freq:
-        #     print(f'pca updated - mu0: {self.mu[0]}')
-        #     batch = torch.stack(self.batch, dim=0) # B x d
-        #     mu = batch.mean(dim=0) # d
-        #     self.mu = mu
-        #     batch -= self.mu[None]
-        #     cov = (batch.unsqueeze(2) @ batch.unsqueeze(1)).mean(dim=0)
-        #     q, _ = torch.qr(self.N)
-        #     self.u = q
-        #     self.s = torch.diag(torch.diag(q.t() @ cov @ q)).sqrt()
-        #     self.cnt = 0
-        #     self.steps += 1
-        #     self.batch = []
+        if self.cnt >= self.update_freq:
+            if self.steps == 0:
+                batch = torch.stack(self.batch, dim=0) # B x d
+                mu = batch.mean(dim=0) # d
+                self.mu = mu
+                batch -= self.mu[None]
+                u, s, v = torch.pca_lowrank(batch, q=self.num_pc)
+                self.u = v
+                self.s = torch.diag(s)
+                self.batch = []
+                self.steps += 1
+        else:
+            self.batch.append(inp)
+            inp = inp - self.mu
+            self.N += inp.unsqueeze(1) @ inp.unsqueeze(0) @ self.u / self.update_freq
+            self.cnt += 1
 
     def get_state(self, device='cpu'):
         return self.mu.to(device), self.u.to(device), self.s.to(device)
@@ -496,7 +492,7 @@ class GeneratorFullModel(torch.nn.Module):
         seg_loss = 0
         for i in range(heatmap.size(1)):
             seg = seg_mask[i].sum(dim=1)
-            seg_loss += ((1 - heatmap[:, [i]]) * seg_mask[i]).mean()
+            seg_loss += ((1 - heatmap[:, [i]]) * seg).mean()
         
         return seg_loss
 
@@ -544,7 +540,6 @@ class GeneratorFullModel(torch.nn.Module):
         kp_driving = x['driving_mesh']
         
         self.register_keypoint(kp_source, kp_driving)
-
         
         kp_source['mesh_bias'] = [self.getattr(f'mu_x_{i}') for i in range(len(self.sections))]
         kp_driving['mesh_bias'] = [self.getattr(f'mu_x_{i}') for i in range(len(self.sections))]
@@ -561,7 +556,7 @@ class GeneratorFullModel(torch.nn.Module):
         X_driving_recon = x_recon + e_driving_recon
         
         mesh_bias = torch.cat([self.getattr(f'mu_x_{i}') for i in range(len(self.sections))], dim=0).view(1, -1, 3).repeat(bs, 1, 1)
-        generated.update({'mesh_bias': {'value': mesh_bias}, 'x': {'value': x_recon}, 'kp_source': {'value': X_source_recon}, 'kp_driving': {'value': X_driving_recon}})
+        generated.update({'kp_driving': {'value': kp_driving['section']}, 'mesh_bias': {'value': mesh_bias}, 'x': {'value': x_recon}})
         
         reg_loss = self.calc_reg_loss(generated['x_source'], generated['e_source'])
         seg_loss = self.calc_seg_loss(generated['mask'], generated['heatmap'])

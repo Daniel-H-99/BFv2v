@@ -26,9 +26,10 @@ class Logger:
         self.best_loss = float('inf')
         self.names = None
 
-    def log_scores(self, loss_names):
+    def log_scores(self, loss_names=None):
+        if loss_names is None:
+            loss_names = self.names
         loss_mean = np.array(self.loss_list).mean(axis=0)
-
         loss_string = "; ".join(["%s - %.5f" % (name, value) for name, value in zip(loss_names, loss_mean)])
         loss_string = str(self.epoch).zfill(self.zfill_num) + ") " + loss_string
 
@@ -149,7 +150,7 @@ class Visualizer:
         out = []
         for arg in args:
             if type(arg) == tuple:
-                if len(args) == 2:
+                if len(arg) == 2:
                     out.append(self.create_image_column_with_kp(arg[0], arg[1]))
                 else:
                     out.append(self.create_image_column_with_section(arg[0], arg[1]))
@@ -166,11 +167,11 @@ class Visualizer:
         source = source.data.cpu()
         source = np.transpose(source, [0, 2, 3, 1])
         
-        if 'kp_source' in out:
-            kp_source = out['kp_source']['value'][:, :, :2].data.cpu().numpy()     # 3d -> 2d
-            images.append((source, kp_source))
-        else:
-            images.append(source)
+        # if 'kp_source' in out:
+        #     kp_source = out['kp_source']['value'][:, :, :2].data.cpu().numpy()     # 3d -> 2d
+        #     images.append((source, kp_source))
+        # else:
+        images.append(source)
 
         # Equivariance visualization
         if 'transformed_frame' in out:
@@ -183,6 +184,7 @@ class Visualizer:
         driving = driving.data.cpu().numpy()
         driving = np.transpose(driving, [0, 2, 3, 1])
         if 'kp_driving' in out:
+            print(f'dp value check: {out["kp_driving"]["value"].shape}')
             kp_driving = out['kp_driving']['value'][:, :, :2].data.cpu().numpy()    # 3d -> 2d
             images.append((driving, kp_driving))
         else:
@@ -267,6 +269,8 @@ class Visualizer:
             kp_x = (source.shape[1] * (out['mesh_bias']['value'][:, :, :2].data.cpu().numpy() + 1) // 2).astype(np.int32)
             # print(f'source x shape: {kp_x.shape}')
             images.append((blank_img, kp_x, None))
+        
+        # print(f'num_images: {len(images)}')
         
         image = self.create_image_grid(*images)
         image = (255 * image).astype(np.uint8)

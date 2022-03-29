@@ -143,7 +143,7 @@ class DenseMotionNetwork(nn.Module):
             xs.append(x)
             kps.append(self.kp_extractors[i](e).view(bs, sec[1], 3)) # B x k x 3
             
-        kp['section'] = torch.stack(scs, dim=1) # B x num_section x e
+        kp['section'] = torch.stack(scs, dim=1) # B x num_section x 3
         kp['kp'] = torch.cat(kps, dim=1)    # B x (num_kp - 1) x 3
         kp['x'] = xs
         kp['e'] = es
