@@ -99,7 +99,7 @@ def process_video(args):
     device = 'cpu' if args.cpu else 'cuda'
     fa = face_alignment.FaceAlignment(face_alignment.LandmarksType._2D, flip_input=False, device=device)
     video = imageio.get_reader(args.inp)
-    if 'fps' not in video:
+    if 'fps' not in video.get_meta_data():
         process_image(inp=args.inp, output=args.output)
     else:
         trajectories = []
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     commands = process_video(args)
-
+    print(commands)
     if commands is not None:
         for command in commands:
             os.system(command)

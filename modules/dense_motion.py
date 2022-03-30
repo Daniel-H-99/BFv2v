@@ -163,8 +163,9 @@ class DenseMotionNetwork(nn.Module):
         
         out_dict['x_source'] = kp_source['x']
         out_dict['e_source'] = kp_source['e']
+        out_dict['kp_source'] = kp_source['kp']
+        out_dict['kp_driving'] = kp_driving['kp']
         
-
         sparse_motion = self.create_sparse_motions(feature, kp_driving, kp_source)
         deformed_feature = self.create_deformed_feature(feature, sparse_motion)
 

@@ -541,13 +541,15 @@ class GeneratorFullModel(torch.nn.Module):
         
         self.register_keypoint(kp_source, kp_driving)
         
+        
         kp_source['mesh_bias'] = [self.getattr(f'mu_x_{i}') for i in range(len(self.sections))]
         kp_driving['mesh_bias'] = [self.getattr(f'mu_x_{i}') for i in range(len(self.sections))]
+        
         
         generated = self.generator(x['source'], kp_source=kp_source, kp_driving=kp_driving)
         
         x_recon = torch.cat(kp_source['x'], dim=1).view(bs, -1, 3) # B x num_raw_point x 3
-        x_recon = torch.cat(self.split_section(kp_source['value']), dim=1)
+        # x_recon = torch.cat(self.split_section(kp_source['value']), dim=1)
 
         e_source_recon = torch.cat(kp_source['e'], dim=1).view(bs, -1, 3)
         

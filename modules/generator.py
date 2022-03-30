@@ -230,6 +230,8 @@ class OcclusionAwareSPADEGenerator(nn.Module):
             output_dict['x_source'] = dense_motion['x_source']
             output_dict['e_source'] = dense_motion['e_source']
             output_dict['heatmap'] = dense_motion['heatmap']
+            output_dict['kp_source'] = dense_motion['kp_source']
+            output_dict['kp_driving'] = dense_motion['kp_driving']
             if 'occlusion_map' in dense_motion:
                 occlusion_map = dense_motion['occlusion_map']
                 output_dict['occlusion_map'] = occlusion_map
