@@ -15,7 +15,7 @@ import glob
 from datetime import datetime
 import torch
 import cv2
-from utils.util import extract_mesh
+from utils.util import extract_mesh, get_mesh_image
 
 def read_video(name, frame_shape):
     """
@@ -367,17 +367,30 @@ class FramesDataset(Dataset):
                     L = self.frame_shape[0]
                     mesh = extract_mesh(img_as_ubyte(frame), self.reference_dict) # {value (N x 3), R (3 x 3), t(3 x 1), c1}
                     A = np.array([-1, -1, 1 / 2], dtype='float32')[:, np.newaxis] # 3 x 1
+                    # print(f'value: {mesh["value"]}')
                     mesh['value'] = np.array(mesh['value'], dtype='float32') * 2 / L  + np.squeeze(A, axis=-1)[None]
                     mesh['R'] = np.array(mesh['R'], dtype='float32')
                     mesh['c'] = np.array(mesh['c'], dtype='float32')
                     t = np.array(mesh['t'], dtype='float32')
                     mesh['t'] = (np.eye(3).astype(np.float32) - mesh['c'] * mesh['R']) @ A + t * 2 / L
+                    mesh['mesh_img'] = (get_mesh_image(mesh['raw_value'], self.frame_shape)[:, :, [0]] / 255.0).transpose((2, 0, 1))
                     meshes.append(mesh)
+                
+                ### before emotion editing ###
+                src_mesh = meshes[0]
+                drv_mesh = meshes[1]
+                target_mesh = (1 / drv_mesh['c'][np.newaxis, np.newaxis]) * np.einsum('ij,nj->ni', np.linalg.inv(drv_mesh['R']), src_mesh['value'] - drv_mesh['t'][np.newaxis, :, 0])
+                target_mesh = L * (target_mesh - np.squeeze(A, axis=-1)[None]) // 2
+                # print(f'targets: {target_mesh}')
+                src_mesh['raw_value'] = (target_mesh * 2) / L - 1
+                src_mesh['mesh_img'] = (get_mesh_image(target_mesh, self.frame_shape)[:, :, [0]] / 255.0).transpose((2, 0, 1))
+                
                 break
             except Exception as e:
                 print(f'error: {e}')
                 continue
-                
+            
+            
         
         out = {}
         # if self.is_train:

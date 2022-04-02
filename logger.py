@@ -167,11 +167,11 @@ class Visualizer:
         source = source.data.cpu()
         source = np.transpose(source, [0, 2, 3, 1])
         
-        # if 'kp_source' in out:
-        #     kp_source = out['kp_source']['value'][:, :, :2].data.cpu().numpy()     # 3d -> 2d
-        #     images.append((source, kp_source))
-        # else:
-        images.append(source)
+        if 'kp_source' in out:
+            kp_source = out['kp_source']['value'][:, :, :2].data.cpu().numpy()     # 3d -> 2d
+            images.append((source, kp_source))
+        else:
+            images.append(source)
 
         # Equivariance visualization
         if 'transformed_frame' in out:
@@ -184,7 +184,7 @@ class Visualizer:
         driving = driving.data.cpu().numpy()
         driving = np.transpose(driving, [0, 2, 3, 1])
         if 'kp_driving' in out:
-            print(f'dp value check: {out["kp_driving"]["value"].shape}')
+            # print(f'dp value check: {out["kp_driving"]["value"].shape}')
             kp_driving = out['kp_driving']['value'][:, :, :2].data.cpu().numpy()    # 3d -> 2d
             images.append((driving, kp_driving))
         else:

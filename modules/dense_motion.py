@@ -15,7 +15,7 @@ class DenseMotionNetwork(nn.Module):
                  estimate_occlusion_map=False):
         super(DenseMotionNetwork, self).__init__()
         # self.hourglass = Hourglass(block_expansion=block_expansion, in_features=(num_kp+1)*(feature_channel+1), max_features=max_features, num_blocks=num_blocks)
-        self.hourglass = Hourglass(block_expansion=block_expansion, in_features=(num_kp+1)*compress + len(sections), max_features=max_features, num_blocks=num_blocks)
+        self.hourglass = Hourglass(block_expansion=block_expansion, in_features=(num_kp+1)*(compress+1), max_features=max_features, num_blocks=num_blocks)
         
         self.mask = nn.Conv3d(self.hourglass.out_filters, num_kp + 1, kernel_size=7, padding=3)
 
@@ -32,20 +32,7 @@ class DenseMotionNetwork(nn.Module):
         self.sections = sections
 
         self.split_ids = [sec[1] for sec in self.sections]
-        self.emotion_estimators = nn.ModuleList()
-        self.kp_extractors = nn.ModuleList()
-        
-        for i, sec in enumerate(self.sections):
-            self.emotion_estimators.append(nn.Sequential(
-                nn.Linear(3 * len(sec[0]), 128),
-                nn.ReLU(),
-                nn.Linear(128, 3 * len(sec[0]))
-            ))
-            self.kp_extractors.append(nn.Sequential(
-                nn.Linear(3 * len(sec[0]), 128),
-                nn.ReLU(),
-                nn.Linear(128, 3 * sec[1])
-            ))
+
             
     def split_section(self, X):
         res = []
@@ -57,46 +44,34 @@ class DenseMotionNetwork(nn.Module):
     def create_sparse_motions(self, feature, kp_driving, kp_source):
         bs, _, d, h, w = feature.shape
         identity_grid = make_coordinate_grid((d, h, w), type=kp_source['kp'].type())
-        identity_grid = identity_grid.view(d, h, w, 3)
+        identity_grid = identity_grid.view(1, 1, d, h, w, 3)
+        coordinate_grid = identity_grid - kp_driving['kp'].view(bs, self.num_kp, 1, 1, 1, 3)
         
-        delta = kp_source['kp'] - kp_driving['kp']     # B x (num_kp - 1) x 3
-        delta = torch.cat([torch.zeros_like(delta[:, [0]]), delta], dim=1)  # B x num_kp x 3
-        frontalized_grid = torch.einsum('dhwp,bnp->bdhwn', identity_grid, kp_driving['R'])
-        scaled_grid = torch.einsum('bdhwn,b->bdhwn', frontalized_grid, kp_driving['c'])
-        normalized_grid = scaled_grid + kp_driving['t'].squeeze(-1).unsqueeze(1).unsqueeze(2).unsqueeze(3) # B x D x H x W x 3
-        transformed_grid = normalized_grid.unsqueeze(1) + delta.unsqueeze(2).unsqueeze(3).unsqueeze(4) # B x K x D x H x W x 3
-        denormalized_grid = transformed_grid - kp_source['t'].squeeze(-1).unsqueeze(1).unsqueeze(2).unsqueeze(3).unsqueeze(4)
-        descaled_grid = torch.einsum('bkdhwn,b->bkdhwn', denormalized_grid, 1 / kp_source['c'])
-        # print(f'type: {kp_source["R"]}')
-        # print(f'type: {descaled_grid}')
-        defrontalized_grid = torch.einsum('bkdhwp,bnp->bkdhwn', descaled_grid.float(), kp_source['R'].inverse())
+        jacobian = (kp_driving['c'] / kp_source['c']).unsqueeze(1).unsqueeze(2) * kp_driving['R'] @ kp_source['R'].inverse() # B x 3 x 3
+        coordinate_grid = torch.einsum('bij,bklmnj->bklmni', jacobian, coordinate_grid)
         
-        driving_to_source = defrontalized_grid
+        k = coordinate_grid.shape[1]
         
-        # coordinate_grid = identity_grid - kp_driving['value'].view(bs, self.num_kp, 1, 1, 1, 3)
-        
-        # k = coordinate_grid.shape[1]
-        
-        # # if 'jacobian' in kp_driving:
-        # if 'jacobian' in kp_driving and kp_driving['jacobian'] is not None:
-        #     jacobian = torch.matmul(kp_source['jacobian'], torch.inverse(kp_driving['jacobian']))
-        #     jacobian = jacobian.unsqueeze(-3).unsqueeze(-3).unsqueeze(-3)
-        #     jacobian = jacobian.repeat(1, 1, d, h, w, 1, 1)
-        #     coordinate_grid = torch.matmul(jacobian, coordinate_grid.unsqueeze(-1))
-        #     coordinate_grid = coordinate_grid.squeeze(-1)
-        # '''
-        # if 'rot' in kp_driving:
-        #     rot_s = kp_source['rot']
-        #     rot_d = kp_driving['rot']
-        #     rot = torch.einsum('bij, bjk->bki', rot_s, torch.inverse(rot_d))
-        #     rot = rot.unsqueeze(-3).unsqueeze(-3).unsqueeze(-3).unsqueeze(-3)
-        #     rot = rot.repeat(1, k, d, h, w, 1, 1)
-        #     # print(rot.shape)
-        #     coordinate_grid = torch.matmul(rot, coordinate_grid.unsqueeze(-1))
-        #     coordinate_grid = coordinate_grid.squeeze(-1)
-        #     # print(coordinate_grid.shape)
-        # '''
-        # driving_to_source = coordinate_grid + kp_source['value'].view(bs, self.num_kp, 1, 1, 1, 3)    # (bs, num_kp, d, h, w, 3)
+        # if 'jacobian' in kp_driving:
+        if 'jacobian' in kp_driving and kp_driving['jacobian'] is not None:
+            jacobian = torch.matmul(kp_source['jacobian'], torch.inverse(kp_driving['jacobian']))
+            jacobian = jacobian.unsqueeze(-3).unsqueeze(-3).unsqueeze(-3)
+            jacobian = jacobian.repeat(1, 1, d, h, w, 1, 1)
+            coordinate_grid = torch.matmul(jacobian, coordinate_grid.unsqueeze(-1))
+            coordinate_grid = coordinate_grid.squeeze(-1)
+        '''
+        if 'rot' in kp_driving:
+            rot_s = kp_source['rot']
+            rot_d = kp_driving['rot']
+            rot = torch.einsum('bij, bjk->bki', rot_s, torch.inverse(rot_d))
+            rot = rot.unsqueeze(-3).unsqueeze(-3).unsqueeze(-3).unsqueeze(-3)
+            rot = rot.repeat(1, k, d, h, w, 1, 1)
+            # print(rot.shape)
+            coordinate_grid = torch.matmul(rot, coordinate_grid.unsqueeze(-1))
+            coordinate_grid = coordinate_grid.squeeze(-1)
+            # print(coordinate_grid.shape)
+        '''
+        driving_to_source = coordinate_grid + kp_source['kp'].view(bs, self.num_kp, 1, 1, 1, 3)    # (bs, num_kp, d, h, w, 3)
 
         #adding background feature
         identity_grid = identity_grid.repeat(bs, 1, 1, 1, 1, 1)
@@ -115,39 +90,54 @@ class DenseMotionNetwork(nn.Module):
         sparse_deformed = sparse_deformed.view((bs, self.num_kp+1, -1, d, h, w))                        # (bs, num_kp+1, c, d, h, w)
         return sparse_deformed
 
-    def create_heatmap_representations(self, feature, kp_driving):
-        spatial_size = feature.shape[3:]
-        # print(f'section shape: {kp_driving["section"].shape}')
-        heatmap = kp2gaussian({'value': kp_driving['section']}, spatial_size=spatial_size, kp_variance=0.01)
-        # adding background feature
-        return heatmap
 
-    def extract_emotion(self, kp):
-        xs = []
-        es = []
-        kps = []
-        scs = []
+    def create_heatmap_representations(self, feature, kp_driving, kp_source):
+        spatial_size = feature.shape[3:]
+        gaussian_driving = kp2gaussian(kp_driving, spatial_size=spatial_size, kp_variance=0.01)
+        gaussian_source = kp2gaussian(kp_source, spatial_size=spatial_size, kp_variance=0.01)
+        heatmap = gaussian_driving - gaussian_source
+
+        # adding background feature
+        zeros = torch.zeros(heatmap.shape[0], 1, spatial_size[0], spatial_size[1], spatial_size[2]).type(heatmap.type())
+        heatmap = torch.cat([zeros, heatmap], dim=1)
+        heatmap = heatmap.unsqueeze(2)         # (bs, num_kp+1, 1, d, h, w)
+        return heatmap
         
-        for i, sec in enumerate(self.sections):
-            # print(f'kp value reporting: {kp["value"]}')
-            # print("12222222")
-            kp_splitted = kp['value'][:, sec[0]] # B x N x 3
-            bs, n, _ = kp_splitted.shape
-            sc = kp_splitted.mean(dim=1) # B x 3
-            sc = kp['R'].inverse() @ (sc.unsqueeze(-1) - kp['t']) / kp['c'].unsqueeze(1).unsqueeze(2)
-            scs.append(sc.squeeze(-1))
-            kp_unbiased = kp_splitted - kp['mesh_bias'][i].view(1, n, 3)
-            e = self.emotion_estimators[i](kp_unbiased.flatten(1)) # B x N * 3
-            x = kp_splitted.flatten(1) - e # B x N * 3
-            es.append(e)
-            xs.append(x)
-            kps.append(self.kp_extractors[i](e).view(bs, sec[1], 3)) # B x k x 3
-            
-        kp['section'] = torch.stack(scs, dim=1) # B x num_section x 3
-        kp['kp'] = torch.cat(kps, dim=1)    # B x (num_kp - 1) x 3
-        kp['x'] = xs
-        kp['e'] = es
+    def extract_rotation_keypoints(self, kp_source, kp_driving):
+        mesh = kp_source['value'] # B x N x 3
+        max_x, min_x = mesh[:, :, 0].max(dim=1)[0], mesh[:, :, 0].min(dim=1)[0]   # B
+        max_y, min_y = mesh[:, :, 1].max(dim=1)[0], mesh[:, :, 1].min(dim=1)[0]   # B
+        max_z = mesh[:, :, 2].max(dim=1)[0]    # B
+        min_z = - max_z # B
+        x_coords = torch.stack([min_x, (max_x + min_x) / 2, max_x], dim=1) # B x 3
+        y_coords = torch.stack([min_y, (max_y + min_y) / 2, max_y], dim=1) # B x 3
+        z_coords = torch.stack([min_z, (max_z + min_z) / 2, max_z], dim=1) # B x 3
+        coords = []
+        for x_coord, y_coord, z_coord in zip(x_coords, y_coords, z_coords):
+            coord = torch.cartesian_prod(x_coord, y_coord, z_coord) # 3 * 3 * 3 x 3
+            coords.append(coord)
+        coords = torch.stack(coords, dim=0) # B x N x 3
         
+        # coords scaling
+        center = coords[:, 14].unsqueeze(1) # B x 1 x 3
+        coords = center + 0.5 * (coords - center)
+        
+        # coords pooling
+        coords = coords.view(-1, 3, 3, 3, 3)
+        coords = coords[:, [0, 2]][:, :, [0, 2]][:, :, :, [0, 2]] # B x 8 x 3
+        coords = coords.view(len(coords), -1, 3)
+        
+        coords = center
+        
+        coords_src = coords - kp_source['t'].unsqueeze(1).squeeze(3) # B x N x 3
+        coords_src = torch.einsum('bij,bnj->bni', kp_source['R'].inverse() / kp_source['c'].unsqueeze(1).unsqueeze(2), coords_src) # B x N x 3
+        
+        coords_drv = coords - kp_driving['t'].unsqueeze(1).squeeze(3) # B x N x 3
+        coords_drv = torch.einsum('bij,bnj->bni', kp_driving['R'].inverse() / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv) # B x N x 3
+
+        return {'src': coords_src, 'drv': coords_drv}         
+        
+
     def forward(self, feature, kp_driving, kp_source):
         bs, _, d, h, w = feature.shape
 
@@ -157,22 +147,22 @@ class DenseMotionNetwork(nn.Module):
 
         out_dict = dict()
         
-        # add 'emotion', 'section' item for each kp
-        self.extract_emotion(kp_driving)
-        self.extract_emotion(kp_source)
+        rotation_kps = self.extract_rotation_keypoints(kp_source, kp_driving)
+        kp_source['kp'] = rotation_kps['src']
+        kp_driving['kp'] = rotation_kps['drv']
         
-        out_dict['x_source'] = kp_source['x']
-        out_dict['e_source'] = kp_source['e']
-        out_dict['kp_source'] = kp_source['kp']
-        out_dict['kp_driving'] = kp_driving['kp']
+        out_dict['kp_source'] = {'value': kp_source['kp']}
+        out_dict['kp_driving'] = {'value': kp_driving['kp']}
         
         sparse_motion = self.create_sparse_motions(feature, kp_driving, kp_source)
         deformed_feature = self.create_deformed_feature(feature, sparse_motion)
-
-        heatmap = self.create_heatmap_representations(deformed_feature, kp_driving)
-        out_dict['heatmap'] = heatmap
         
-        input = torch.cat([heatmap, deformed_feature.view(bs, -1, d, h, w)], dim=1)
+        heatmap = self.create_heatmap_representations(deformed_feature, kp_driving, kp_source)
+        out_dict['heatmap'] = heatmap
+
+
+        input = torch.cat([heatmap, deformed_feature], dim=2)
+        input = input.view(bs, -1, d, h, w)
 
         # input = deformed_feature.view(bs, -1, d, h, w)      # (bs, num_kp+1 * c, d, h, w)
 

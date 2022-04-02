@@ -306,9 +306,11 @@ class GeneratorFullModel(torch.nn.Module):
         self.scales = train_params['scales']
         self.disc_scales = self.discriminator.scales
         self.pyramid = ImagePyramide(self.scales, generator.image_channel)
+        self.pyramid_cond = ImagePyramide(self.scales, generator.image_channel + 1)
         if torch.cuda.is_available():
             self.pyramid = self.pyramid.cuda()
-
+            self.pyramid_cond = self.pyramid_cond.cuda()
+            
         self.loss_weights = train_params['loss_weights']
 
         self.estimate_jacobian = estimate_jacobian
@@ -444,6 +446,20 @@ class GeneratorFullModel(torch.nn.Module):
             res.append(X[:, sec[0]])
         return res
     
+    def split_section_and_normalize(self, X):
+        res = []
+        secs = []
+        for i, sec in enumerate(self.sections):
+            sec_mean = X[:, sec[0]].mean(dim=1)
+            res.append(X[:, sec[0]] - sec_mean.unsqueeze(1))
+            secs.append(sec_mean)
+        return res, secs
+    
+    def concat_section(self, sections):
+        # sections[]: (num_sections) x B x -1 x 3
+        return torch.cat(sections, dim=1)
+    
+    
     def register_keypoint(self, kp_source, kp_driving):
         X_source = kp_source['value']
         X_driving = kp_driving['value']
@@ -539,32 +555,17 @@ class GeneratorFullModel(torch.nn.Module):
         kp_source = x['source_mesh']
         kp_driving = x['driving_mesh']
         
-        self.register_keypoint(kp_source, kp_driving)
-        
-        
-        kp_source['mesh_bias'] = [self.getattr(f'mu_x_{i}') for i in range(len(self.sections))]
-        kp_driving['mesh_bias'] = [self.getattr(f'mu_x_{i}') for i in range(len(self.sections))]
-        
         
         generated = self.generator(x['source'], kp_source=kp_source, kp_driving=kp_driving)
+        src_section = self.concat_section(self.split_section(kp_source['value']))
+        tgt_section = self.concat_section(self.split_section(kp_source['raw_value']))
+        # print(f'src section: {src_section}')
+        # print(f'drv section: {tgt_section}')
+        generated['kp_source'] = {'value': src_section}
+        generated['kp_driving'] = {'value': tgt_section}
+        # seg_loss = self.calc_seg_loss(generated['mask'], generated['heatmap'])
         
-        x_recon = torch.cat(kp_source['x'], dim=1).view(bs, -1, 3) # B x num_raw_point x 3
-        # x_recon = torch.cat(self.split_section(kp_source['value']), dim=1)
-
-        e_source_recon = torch.cat(kp_source['e'], dim=1).view(bs, -1, 3)
-        
-        e_driving_recon = torch.cat(kp_driving['e'], dim=1).view(bs, -1, 3)
-        X_source_recon = x_recon + e_source_recon
-        X_driving_recon = x_recon + e_driving_recon
-        
-        mesh_bias = torch.cat([self.getattr(f'mu_x_{i}') for i in range(len(self.sections))], dim=0).view(1, -1, 3).repeat(bs, 1, 1)
-        generated.update({'kp_driving': {'value': kp_driving['section']}, 'mesh_bias': {'value': mesh_bias}, 'x': {'value': x_recon}})
-        
-        reg_loss = self.calc_reg_loss(generated['x_source'], generated['e_source'])
-        seg_loss = self.calc_seg_loss(generated['mask'], generated['heatmap'])
-        
-        loss_values['regularizor'] = self.loss_weights['regularizor'] * reg_loss
-        loss_values['segmentation'] = self.loss_weights['segmentation'] * seg_loss
+        # loss_values['segmentation'] = self.loss_weights['segmentation'] * seg_loss
 
         pyramide_real = self.pyramid(x['driving'])
         pyramide_generated = self.pyramid(generated['prediction'])
@@ -581,8 +582,11 @@ class GeneratorFullModel(torch.nn.Module):
             loss_values['perceptual'] = value_total
 
         if self.loss_weights['generator_gan'] != 0:
+            pyramide_real = self.pyramid_cond(torch.cat([kp_driving['mesh_img'].cuda(), x['driving']], dim=1))
+            pyramide_generated = self.pyramid_cond(torch.cat([kp_source['mesh_img'].cuda(), generated['prediction']], dim=1))
             discriminator_maps_generated = self.discriminator(pyramide_generated)
             discriminator_maps_real = self.discriminator(pyramide_real)
+            
             value_total = 0
             for scale in self.disc_scales:
                 key = 'prediction_map_%s' % scale
@@ -706,7 +710,7 @@ class DiscriminatorFullModel(torch.nn.Module):
         self.discriminator = discriminator
         self.train_params = train_params
         self.scales = self.discriminator.scales
-        self.pyramid = ImagePyramide(self.scales, generator.image_channel)
+        self.pyramid = ImagePyramide(self.scales, generator.image_channel + 1)
         if torch.cuda.is_available():
             self.pyramid = self.pyramid.cuda()
 
@@ -721,9 +725,12 @@ class DiscriminatorFullModel(torch.nn.Module):
         return self.zero_tensor.expand_as(input)
 
     def forward(self, x, generated):
-        pyramide_real = self.pyramid(x['driving'])
-        pyramide_generated = self.pyramid(generated['prediction'].detach())
+        # pyramide_real = self.pyramid(x['driving'])
+        # pyramide_generated = self.pyramid(generated['prediction'].detach())
 
+        pyramide_real = self.pyramid(torch.cat([x['driving_mesh']['mesh_img'].cuda(), x['driving']], dim=1))
+        pyramide_generated = self.pyramid(torch.cat([x['source_mesh']['mesh_img'].cuda(), generated['prediction'].detach()], dim=1))
+        
         discriminator_maps_generated = self.discriminator(pyramide_generated)
         discriminator_maps_real = self.discriminator(pyramide_real)
 

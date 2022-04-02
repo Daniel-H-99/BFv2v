@@ -227,8 +227,6 @@ class OcclusionAwareSPADEGenerator(nn.Module):
             dense_motion = self.dense_motion_network(feature=feature_3d, kp_driving=kp_driving,
                                                      kp_source=kp_source)
             output_dict['mask'] = dense_motion['mask']
-            output_dict['x_source'] = dense_motion['x_source']
-            output_dict['e_source'] = dense_motion['e_source']
             output_dict['heatmap'] = dense_motion['heatmap']
             output_dict['kp_source'] = dense_motion['kp_source']
             output_dict['kp_driving'] = dense_motion['kp_driving']
