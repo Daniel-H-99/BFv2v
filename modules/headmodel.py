@@ -156,8 +156,11 @@ class HeadModel(nn.Module):
         X_source = kp_source['value']
         X_driving = kp_driving['value']
 
-        X_source_splitted, _ = self.split_section_and_normalize(X_source)
-        X_driving_splitted, _ = self.split_section_and_normalize(X_driving)
+        # X_source_splitted, _ = self.split_section_and_normalize(X_source)
+        # X_driving_splitted, _ = self.split_section_and_normalize(X_driving)
+
+        X_source_splitted = self.split_section(X_source)
+        X_driving_splitted = self.split_section(X_driving) 
         
         MAX_LEN = 1000
         if len(self.x_primes[0]) > MAX_LEN:
@@ -169,7 +172,7 @@ class HeadModel(nn.Module):
             
             x_prime = x.flatten(1).detach().cpu()
             e_tilda = (math.sqrt(2) * e).flatten(1).detach().cpu()
-            e_prime = math.sqrt(2) * (e.flatten(1) / k_e[i].clamp(min=1e-3)).detach().cpu()
+            e_prime = math.sqrt(2) * e.flatten(1).detach().cpu()
             
             for x_prime_i in x_prime:
                 self.x_primes[i].append(x_prime_i)
@@ -267,11 +270,11 @@ class HeadModel(nn.Module):
             u_e = (k_e.unsqueeze(2) * u_e.unsqueeze(0)).view(len(k_e), *u_e.shape) # B x 3 * num_kp x num_pc
             
             A = (torch.eye(num_pc).cuda() + (u_x @ s_x).t() @ sigma_err.inverse() @ (u_x @ s_x))[None].repeat(len(x), 1, 1)  # B x num_pc x num_pc
-            B = (u_e @ s_e).transpose(1, 2) @ sigma_err.inverse() @ (u_e @ s_e) # B x num_pc x num_pc
+            B = (u_x @ s_x).t() @ sigma_err.inverse() @ (u_e @ s_e) # B x num_pc x num_pc
             C = (u_x @ s_x).t() @ sigma_err.inverse() @ (x - mu_x[None]).unsqueeze(-1) # B x num_pc x num_pc
-            A_ = (u_x @ s_x).t() @ sigma_err.inverse() @ (u_e @ s_e) # B x num_pc x num_pc
+            A_ = (u_e @ s_e).transpose(1, 2) @ sigma_err.inverse() @ (u_x @ s_x) # B x num_pc x num_pc
             B_ = torch.eye(num_pc).cuda()[None] + (u_e @ s_e).transpose(1, 2) @ sigma_err.inverse() @ (u_e @ s_e)   # B x num_pc x num_pc
-            C_ = (u_e @ s_e).transpose(1, 2) @ sigma_err.inverse() @ (x - mu_x[None]).unsqueeze(-1)  # B x num_pc x num_pc
+            C_ = (u_e @ s_e).transpose(1, 2) @ sigma_err.inverse() @ (x - mu_x[None]).unsqueeze(-1)  # B x num_pc x 1
 
             M = torch.cat([torch.cat([A, B], dim=2), torch.cat([A_, B_], dim=2)], dim=1) # B x (2 * num_pc) x (2 * num_pc)
             N = torch.cat([C, C_], dim=1) # B x (2 * num_pc) x 1
@@ -280,6 +283,17 @@ class HeadModel(nn.Module):
             kp_reg_x = (mu_x.unsqueeze(0).unsqueeze(-1) + u_x @ s_x @ z_x_estimated).squeeze(2) # B x num_kp * 3
             kp_reg_e = (u_e @ s_e @ z_e_estimated).squeeze(2) # B x num_kp * 3 
             
+            # grad_x = A @ z_x_estimated + B @ z_e_estimated - C
+            # grad_e = A_ @ z_x_estimated + B_ @ z_e_estimated - C_
+            # tmp = u_x @ s_x @ z_x_estimated
+            # print(f'recon x shape: {tmp.shape}')
+            # tmp = u_e @ s_e @ z_e_estimated
+            # print(f'recon e shape: {tmp.shape}')
+            # recon_err = ((u_x @ s_x @ z_x_estimated + u_e @ s_e @ z_e_estimated).squeeze(-1) + mu_x[None] - x)
+            # print('###check optimality###')
+            # print(f'grad_x: {grad_x}')
+            # print(f'grad_e: {grad_e}')
+            # print(f'recon error: {recon_err}')
         return {'x': kp_reg_x, 'e': kp_reg_e, 'k_e': k_e}
 
     def print_statistics(self):
@@ -306,7 +320,9 @@ class HeadModel(nn.Module):
         kp_reg_es = []
         k_es = []
         
-        secs, means = self.split_section_and_normalize(kp['value'])
+        # secs, means = self.split_section_and_normalize(kp['value'])
+        # means = [torch.zeros_like(m) for m in means]
+        secs = self.split_section(kp['value'])
         
         for i, sec in enumerate(secs):
             mu_x = self.getattr(f'mu_x_{i}')
@@ -321,7 +337,8 @@ class HeadModel(nn.Module):
             kp_reg_es.append(kp_reg['e'])
             k_es.append(kp_reg['k_e'])
         
-        return {'x': kp_reg_xs, 'e': kp_reg_es, 'k_e': k_es, 'mean': means}
+        return {'x': kp_reg_xs, 'e': kp_reg_es, 'k_e': k_es}        
+        # return {'x': kp_reg_xs, 'e': kp_reg_es, 'k_e': k_es, 'mean': means}
         
     def forward(self, x, eval=False):
         loss_values = {}
@@ -356,8 +373,10 @@ class HeadModel(nn.Module):
         
         generated['raw_source_X'] = self.concat_section(self.split_section(kp_source['value']))
         generated['raw_driving_X'] = self.concat_section(self.split_section(kp_driving['value']))
-        generated['source_x'] = self.concat_section_and_denormalize([v.view(bs, -1, 3) for v in source_res['x']], source_res['mean'])
-        generated['driving_x'] = self.concat_section_and_denormalize([v.view(bs, -1, 3) for v in driving_res['x']], driving_res['mean'])
+        # generated['source_x'] = self.concat_section_and_denormalize([v.view(bs, -1, 3) for v in source_res['x']], source_res['mean'])
+        # generated['driving_x'] = self.concat_section_and_denormalize([v.view(bs, -1, 3) for v in driving_res['x']], driving_res['mean'])
+        generated['source_x'] = self.concat_section([v.view(bs, -1, 3) for v in source_res['x']])
+        generated['driving_x'] = self.concat_section([v.view(bs, -1, 3) for v in driving_res['x']])
         generated['source_e'] = self.concat_section(source_res['e']).view(bs, -1 ,3)
         generated['driving_e'] = self.concat_section(driving_res['e']).view(bs, -1, 3)
         # generated['mesh_bias'] = self.get_mesh_bias()[None].repeat(bs, 1, 1)
@@ -366,7 +385,7 @@ class HeadModel(nn.Module):
         
         return loss_values, generated
         
-    def estimate_params_section(self, x, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err, num_pc):
+    def estimate_params_section_v2(self, x, e_normalized, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err, num_kp):
         # x: B x N * 3   
         
         assert x is not None
@@ -383,7 +402,22 @@ class HeadModel(nn.Module):
         mu_xs = sigma_x @ A_x.t() @ sigma_inverse @ x.unsqueeze(2) # B x num_pc x 1
         sigma_x_total = (len(x) * sigma_x.inverse() + torch.eye(sigma_x.size(0)).cuda() * self.s_err_square).inverse()
         mu_x_total = sigma_x_total @ sigma_x.inverse() @ mu_xs.sum(dim=0) # 3 * num_kp x 1
+        sigma_x_total = sigma_x_total * self.s_err_square
     
+        # mu_x_total = torch.zeros(num_kp, 1).cuda()
+        # sigma_x_total = torch.eye(num_kp).cuda()
+        
+        # v2
+        e_driven = e_normalized * k_e[None]
+        n = len(e_driven)
+        sigma_x_driven = (n * sigma_x.inverse() / self.s_err_square + sigma_x_total.inverse()).inverse()
+        M = sigma_x @ A_x.t() @ sigma_inverse
+        N = mu_x_total.t() @ sigma_x_total.inverse()
+        zx_driven = (torch.eye(num_kp).cuda() - n * sigma_x_driven.t() @ sigma_x.inverse().t() @ M @ A_x / self.s_err_square).inverse() @ sigma_x_driven.t() @ (sigma_x.inverse().t() @ M @ e_driven.sum(dim=0).unsqueeze(1) / self.s_err_square + N.t()) 
+        x_driven = A_x @ zx_driven
+        # print(f'M shape: {M.shape}')
+        # print(f'N shape: {N.shape}')
+        # print(f'x_driven shape: {x_driven.shape}')
         # sigma_inverse = torch.eye(A_e.size(0))
         # sigma_x = ()
         # sigma_e_square_inverse = u_e @ (u_e.t() @ u_e).inverse() @ s_e.inverse().t() @ s_e.inverse() @ (u_e.t() @ u_e).inverse() @ u_e.t()
@@ -403,8 +437,79 @@ class HeadModel(nn.Module):
         # print(f'simga e square inverse: {sigma_e_square_inverse}')
         # print(f'simga e square inverse: {sigma_e_square_inverse}')
         # print(f'simga e square inverse: {sigma_e_square_inverse}')
-        kp_reg_x = A_x @ mu_x_total.squeeze(1) + mu_x   # N * 3
-        kp_reg_e = x - kp_reg_x[None]   # B x N * 3
+        kp_reg_e = x - x_driven.squeeze(1)[None]   # B x N * 3
+        kp_reg_x = x_driven.squeeze(1) + mu_x   # N * 3
+
+        return {'x': kp_reg_x, 'e': kp_reg_e, 'k_e': k_e}
+      
+    def estimate_params_v2(self, x, e_normalized):
+        # data: {v: B x ...}
+        bs = len(x['mesh']['value'])
+    
+        kp = x['mesh']
+        
+        kp_reg_xs = []
+        kp_reg_es = []
+        k_es = []
+        
+        secs = self.split_section(kp['value'].cuda())
+        
+        for i, sec in enumerate(secs):
+            mu_x = self.getattr(f'mu_x_{i}')
+            u_x = self.getattr(f'u_x_{i}')
+            s_x = self.getattr(f's_x_{i}')
+            u_e = self.getattr(f'u_e_{i}')
+            s_e = self.getattr(f's_e_{i}')
+            sigma_err = self.getattr(f'sigma_err_{i}')
+            
+            kp_reg = self.estimate_params_section_v2(sec.flatten(1), e_normalized[i], self.scalers[i], mu_x, u_x, s_x, u_e, s_e, sigma_err, self.sections[i][1])
+            
+            kp_reg_xs.append(kp_reg['x'])   # num_kp * 3
+            kp_reg_es.append(kp_reg['e'])   # B x num_kp * 3
+            k_es.append(kp_reg['k_e'])      # num_kp * 3
+        
+        return {'x': kp_reg_xs, 'e': kp_reg_es, 'k_e': k_es}
+    
+    
+    def estimate_params_section(self, x, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err, num_pc):
+        # x: B x N * 3   
+        
+        assert x is not None
+        x = x - mu_x[None]
+        k_e = self.get_scale(x, scaler).mean(dim=0) # n * 3
+        
+        u_e = k_e.unsqueeze(1) * u_e    # 3 * num_kp x num_pc
+        
+        A_e = u_e @ s_e
+        A_x = u_x @ s_x
+        sigma_e = (A_e.t() @ A_e + torch.eye(A_e.size(1)).cuda() * self.s_err_square).inverse()
+        sigma_inverse = torch.eye(A_e.size(0)).cuda() - A_e @ sigma_e @ A_e.t()
+        sigma_x = (A_x.t() @ sigma_inverse @ A_x).inverse()
+        mu_xs = sigma_x @ A_x.t() @ sigma_inverse @ x.unsqueeze(2) # B x num_pc x 1
+        sigma_x_total = (len(x) * sigma_x.inverse() + torch.eye(sigma_x.size(0)).cuda() * self.s_err_square).inverse()
+        mu_x_total = sigma_x_total @ sigma_x.inverse() @ mu_xs.sum(dim=0) # 3 * num_kp x 1
+        sigma_x_total = sigma_x_total * self.s_err_square
+        # sigma_inverse = torch.eye(A_e.size(0))
+        # sigma_x = ()
+        # sigma_e_square_inverse = u_e @ (u_e.t() @ u_e).inverse() @ s_e.inverse().t() @ s_e.inverse() @ (u_e.t() @ u_e).inverse() @ u_e.t()
+        # sigma_x_square_inverse = u_x @ s_x.inverse().t() @ s_x.inverse() @ u_x.t()
+        # sigma_inverse = (sigma_err.inverse() + sigma_e_square_inverse).inverse()
+        # sigma_inverse = sigma_err.inverse() - sigma_err.inverse() @ sigma_inverse @ sigma_err.inverse()
+        # sigma_x_X_square_inverse = sigma_x_square_inverse + \
+        #     len(x) * sigma_inverse
+        # mu_x_X = sigma_x_X_square_inverse.inverse() @ (0 * sigma_x_square_inverse @ mu_x.unsqueeze(1) + \
+        #     torch.stack([((torch.eye(len(sigma_err)).cuda() - (torch.eye(len(sigma_err)).cuda() + sigma_e_square_inverse @ sigma_err).inverse()) @ sigma_err.inverse() @ X.unsqueeze(1)) for X in x], dim=0).sum(dim=0))
+        
+        # print(f'test: {sigma_x_X_square_inverse.inverse() @ sigma_x_X_square_inverse}')
+        # mu_x_X = mu_x.unsqueeze(1)
+        # mu_x_X = x[0].unsqueeze(1)
+        # print(f'k_e: {mu_x_X}')
+        # print(f'simga x square inverse: {sigma_e_square_inverse}')
+        # print(f'simga e square inverse: {sigma_e_square_inverse}')
+        # print(f'simga e square inverse: {sigma_e_square_inverse}')
+        # print(f'simga e square inverse: {sigma_e_square_inverse}')
+        kp_reg_e = x - (A_x @ mu_x_total).squeeze(1)[None]   # B x N * 3
+        kp_reg_x = (A_x @ mu_x_total.squeeze(1)) + mu_x   # N * 3
 
         return {'x': kp_reg_x, 'e': kp_reg_e, 'k_e': k_e}
       
@@ -418,7 +523,7 @@ class HeadModel(nn.Module):
         kp_reg_es = []
         k_es = []
         
-        secs, means = self.split_section_and_normalize(kp['value'].cuda())
+        secs = self.split_section(kp['value'].cuda())
         
         for i, sec in enumerate(secs):
             mu_x = self.getattr(f'mu_x_{i}')
@@ -434,11 +539,11 @@ class HeadModel(nn.Module):
             kp_reg_es.append(kp_reg['e'])   # B x num_kp * 3
             k_es.append(kp_reg['k_e'])      # num_kp * 3
         
-        return {'x': kp_reg_xs, 'e': kp_reg_es, 'k_e': k_es, 'mean': means}
+        return {'x': kp_reg_xs, 'e': kp_reg_es, 'k_e': k_es}
     
-    def drive(self, drv, x_src, k_e_src, mean_src, x_drv=None, k_e_drv=None):
+    def drive(self, drv, x_src, k_e_src, x_drv=None, k_e_drv=None):
         # drv: {v: 1 x ...}
-        secs, means = self.split_section_and_normalize(drv['mesh']['value'].cuda())
+        secs = self.split_section(drv['mesh']['value'].cuda())
         src = []
         driving = []
         driven = []
@@ -454,7 +559,7 @@ class HeadModel(nn.Module):
             u_e_src = k_e_src[i].unsqueeze(1) * u_e
             # e_src = e_drv * k_e_src[i] / k_e_drv[i] 
             e_src = u_e_src @ z_e
-            X_driven = mean_src[i] + x_src[i].view(-1, 3) + e_src.view(-1, 3)
+            X_driven = x_src[i].view(-1, 3) + e_src.view(-1, 3)
             # print(f'e src shape: {e_src.shape}')
             # print(f'mean src shape: {mean_src[i].shape}')
             # print(f'sec shape: {sec.shape}')
@@ -462,8 +567,8 @@ class HeadModel(nn.Module):
             # print(f'driving shape: {(x_drv[i].view(-1, 3) + means[i][None]).shape}')
             # print(f'source shape: {(x_src[i].view(-1, 3) + mean_src[i][None]).shape}')
             driven.append(X_driven)
-            driving.append(x_drv[i].view(-1, 3) + means[i] + e_drv.view(-1, 3))
-            src.append(x_src[i].view(-1, 3) + mean_src[i])
+            driving.append(x_drv[i].view(-1, 3) + e_drv.view(-1, 3))
+            src.append(x_src[i].view(-1, 3))
             
         
         return torch.cat(src, dim=0), torch.cat(driving, dim=0), torch.cat(driven, dim=0)

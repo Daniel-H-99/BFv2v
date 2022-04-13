@@ -3,7 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 from modules.util import ResBlock2d, SameBlock2d, UpBlock2d, DownBlock2d, ResBlock3d, SPADEResnetBlock
 from modules.dense_motion import DenseMotionNetwork
-
+from modules.face_mover import FaceMover
 
 class OcclusionAwareGenerator(nn.Module):
     """
@@ -161,7 +161,7 @@ class SPADEDecoder(nn.Module):
 class OcclusionAwareSPADEGenerator(nn.Module):
 
     def __init__(self, image_channel, feature_channel, num_kp, sections, block_expansion, max_features, num_down_blocks, reshape_channel, reshape_depth,
-                 num_resblocks, estimate_occlusion_map=False, dense_motion_params=None, estimate_jacobian=False):
+                 num_resblocks, estimate_occlusion_map=False, dense_motion_params=None, estimate_jacobian=False, ignore_emotion=False):
         super(OcclusionAwareSPADEGenerator, self).__init__()
 
         self.sections = sections
@@ -174,6 +174,9 @@ class OcclusionAwareSPADEGenerator(nn.Module):
         else:
             self.dense_motion_network = None
 
+        self.face_mover = FaceMover(num_kp=num_kp, sections=sections, feature_channel=feature_channel,
+                                                           estimate_occlusion_map=estimate_occlusion_map,
+                                                           **dense_motion_params)
         self.first = SameBlock2d(image_channel, block_expansion, kernel_size=(3, 3), padding=(1, 1))
 
         down_blocks = []
@@ -201,6 +204,8 @@ class OcclusionAwareSPADEGenerator(nn.Module):
 
         self.decoder = SPADEDecoder()
 
+        self.ignore_emotion = ignore_emotion
+        
     def deform_input(self, inp, deformation):
         _, d_old, h_old, w_old, _ = deformation.shape
         _, _, d, h, w = inp.shape
@@ -212,7 +217,15 @@ class OcclusionAwareSPADEGenerator(nn.Module):
 
     def forward(self, source_image, kp_driving, kp_source):
         # Encoding (downsampling) part
+        output_dict = {}
         out = self.first(source_image)
+        
+        # if False:
+        moved = self.face_mover(kp_source, kp_driving, out, source_image)
+        output_dict = moved
+        out = moved['moved_feature']
+        del output_dict['moved_feature']
+        
         for i in range(len(self.down_blocks)):
             out = self.down_blocks[i](out)
         out = self.second(out)
@@ -220,9 +233,8 @@ class OcclusionAwareSPADEGenerator(nn.Module):
         # print(out.shape)
         feature_3d = out.view(bs, self.reshape_channel, self.reshape_depth, h ,w) 
         feature_3d = self.resblocks_3d(feature_3d)
-
+        
         # Transforming feature representation according to deformation and occlusion
-        output_dict = {}
         if self.dense_motion_network is not None:
             dense_motion = self.dense_motion_network(feature=feature_3d, kp_driving=kp_driving,
                                                      kp_source=kp_source)

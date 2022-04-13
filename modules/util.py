@@ -258,18 +258,17 @@ class SameBlock2d(nn.Module):
         out = self.ac(out)
         return out
 
-
 class Encoder(nn.Module):
     """
     Hourglass Encoder
     """
 
-    def __init__(self, block_expansion, in_features, num_blocks=3, max_features=256):
+    def __init__(self, block_expansion, in_features, num_blocks=3, max_features=256, is_2D=False):
         super(Encoder, self).__init__()
-
+        downblock = DownBlock3d if not is_2D else DownBlock2d
         down_blocks = []
         for i in range(num_blocks):
-            down_blocks.append(DownBlock3d(in_features if i == 0 else min(max_features, block_expansion * (2 ** i)),
+            down_blocks.append(downblock(in_features if i == 0 else min(max_features, block_expansion * (2 ** i)),
                                            min(max_features, block_expansion * (2 ** (i + 1))),
                                            kernel_size=3, padding=1))
         self.down_blocks = nn.ModuleList(down_blocks)
@@ -286,22 +285,25 @@ class Decoder(nn.Module):
     Hourglass Decoder
     """
 
-    def __init__(self, block_expansion, in_features, num_blocks=3, max_features=256):
+    def __init__(self, block_expansion, in_features, num_blocks=3, max_features=256, is_2D=False):
         super(Decoder, self).__init__()
 
+        upblock = UpBlock3d if not is_2D else UpBlock2d
         up_blocks = []
 
         for i in range(num_blocks)[::-1]:
             in_filters = (1 if i == num_blocks - 1 else 2) * min(max_features, block_expansion * (2 ** (i + 1)))
             out_filters = min(max_features, block_expansion * (2 ** i))
-            up_blocks.append(UpBlock3d(in_filters, out_filters, kernel_size=3, padding=1))
+            up_blocks.append(upblock(in_filters, out_filters, kernel_size=3, padding=1))
 
         self.up_blocks = nn.ModuleList(up_blocks)
         # self.out_filters = block_expansion
         self.out_filters = block_expansion + in_features
 
-        self.conv = nn.Conv3d(in_channels=self.out_filters, out_channels=self.out_filters, kernel_size=3, padding=1)
-        self.norm = BatchNorm3d(self.out_filters, affine=True)
+        conv = nn.Conv3d if not is_2D else nn.Conv2d
+        self.conv = conv(in_channels=self.out_filters, out_channels=self.out_filters, kernel_size=3, padding=1)
+        norm = BatchNorm3d if not is_2D else BatchNorm2d
+        self.norm = norm(self.out_filters, affine=True)
 
     def forward(self, x):
         out = x.pop()
@@ -322,10 +324,10 @@ class Hourglass(nn.Module):
     Hourglass architecture.
     """
 
-    def __init__(self, block_expansion, in_features, num_blocks=3, max_features=256):
+    def __init__(self, block_expansion, in_features, num_blocks=3, max_features=256, is_2D=False):
         super(Hourglass, self).__init__()
-        self.encoder = Encoder(block_expansion, in_features, num_blocks, max_features)
-        self.decoder = Decoder(block_expansion, in_features, num_blocks, max_features)
+        self.encoder = Encoder(block_expansion, in_features, num_blocks, max_features, is_2D=is_2D)
+        self.decoder = Decoder(block_expansion, in_features, num_blocks, max_features, is_2D=is_2D)
         self.out_filters = self.decoder.out_filters
 
     def forward(self, x):

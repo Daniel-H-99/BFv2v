@@ -53,7 +53,9 @@ class Logger:
                  optimizer_generator=None, optimizer_discriminator=None, optimizer_kp_detector=None, optimizer_he_estimator=None, optimizer_headmodel=None):
         checkpoint = torch.load(checkpoint_path)
         if generator is not None:
-            generator.load_state_dict(checkpoint['generator'])
+            ckpt = generator.state_dict()
+            ckpt.update(checkpoint['generator'])
+            generator.load_state_dict(ckpt)
         if kp_detector is not None:
             kp_detector.load_state_dict(checkpoint['kp_detector'])
         if he_estimator is not None:
@@ -66,8 +68,10 @@ class Logger:
         if headmodel is not None:
             headmodel.load_state_dict(checkpoint['headmodel'])
             
-        if optimizer_generator is not None:
-            optimizer_generator.load_state_dict(checkpoint['optimizer_generator'])
+        # if optimizer_generator is not None:
+        #     ckpt = optimizer_generator.state_dict()
+        #     ckpt.update(checkpoint['optimizer_generator'])
+        #     optimizer_generator.load_state_dict(ckpt)
         if optimizer_discriminator is not None:
             try:
                 optimizer_discriminator.load_state_dict(checkpoint['optimizer_discriminator'])
@@ -270,6 +274,25 @@ class Visualizer:
             # print(f'source x shape: {kp_x.shape}')
             images.append((blank_img, kp_x, None))
         
+        if 'coefs' in out:
+            for i in range(out['coefs'].shape[1]):
+                mask = out['coefs'][:, i:(i+1)].data.cpu().repeat(1, 3, 1, 1)    # (n, 3, h, w)
+                # mask = F.softmax(mask.view(mask.shape[0], mask.shape[1], -1), dim=2).view(mask.shape)
+                mask = F.interpolate(mask, size=source.shape[1:3]).numpy()
+                mask = np.transpose(mask, [0, 2, 3, 1])
+
+                if i != 0:
+                    color = np.array(self.colormap((i - 1) / (out['mask'].shape[1] - 1)))[:3]
+                else:
+                    color = np.array((0, 0, 0))
+
+                color = color.reshape((1, 1, 1, 3))
+                
+                if i != 0:
+                    images.append(mask * color)
+                else:
+                    images.append(mask)
+                    
         # print(f'num_images: {len(images)}')
         
         image = self.create_image_grid(*images)

@@ -30,7 +30,7 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
         start_epoch = 0
 
     scheduler_generator = MultiStepLR(optimizer_generator, train_params['epoch_milestones'], gamma=0.1,
-                                      last_epoch=start_epoch - 1)
+                                      last_epoch= -1)
     scheduler_discriminator = MultiStepLR(optimizer_discriminator, train_params['epoch_milestones'], gamma=0.1,
                                           last_epoch=start_epoch - 1)
     # scheduler_kp_detector = MultiStepLR(optimizer_kp_detector, train_params['epoch_milestones'], gamma=0.1,

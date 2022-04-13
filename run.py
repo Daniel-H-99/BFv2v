@@ -87,7 +87,7 @@ if __name__ == "__main__":
     # if torch.cuda.is_available():
     #     he_estimator.to(opt.device_ids[0])
 
-    dataset = FramesDataset(is_train=(opt.mode == 'train'), **config['dataset_params'])
+    dataset = FramesDataset(is_train=(opt.mode == 'train'), **config['dataset_params'], train_params=config['train_params'])
 
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)

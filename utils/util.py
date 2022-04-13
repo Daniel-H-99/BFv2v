@@ -76,6 +76,9 @@ LEFT_EYE_IDX = [384, 385, 386, 387, 388, 390, 263, 362, 398, 466, 373, 374, 249,
 RIGHT_EYE_IDX = [160, 33, 161, 163, 133, 7, 173, 144, 145, 246, 153, 154, 155, 157, 158, 159]
 CONTOUR_IDX = [0, 7, 10, 13, 14, 17, 21, 33, 37, 39, 40, 46, 52, 53, 54, 55, 58, 61, 63, 65, 66, 67, 70, 78, 80, 81, 82, 84, 87, 88, 91, 93, 95, 103, 105, 107, 109, 127, 132, 133, 136, 144, 145, 146, 148, 149, 150, 152, 153, 154, 155, 157, 158, 159, 160, 161, 162, 163, 172, 173, 176, 178, 181, 185, 191, 234, 246, 249, 251, 263, 267, 269, 270, 276, 282, 283, 284, 285, 288, 291, 293, 295, 296, 297, 300, 308, 310, 311, 312, 314, 317, 318, 321, 323, 324, 332, 334, 336, 338, 356, 361, 362, 365, 373, 374, 375, 377, 378, 379, 380, 381, 382, 384, 385, 386, 387, 388, 389, 390, 397, 398, 400, 402, 405, 409, 415, 454, 466]
 ROI_IDX = LIP_IDX + LEFT_EYE_IDX + RIGHT_EYE_IDX
+LEFT_EYEBROW_IDX = [336, 285, 295, 282, 283, 276, 300, 293, 334, 296]
+RIGHT_EYEBROW_IDX = [70, 46, 53, 52, 65, 55, 107, 66, 105, 63]
+CHIN_IDX = [379, 378, 400, 377, 152, 148, 176, 149, 150, 136]
 
 def create_dir(dir_name):
     if not os.path.exists(dir_name):
@@ -270,22 +273,33 @@ def draw_mask(maskKp, shape, c=(255, 255, 255)):
   mask = mask.astype(np.float32) / 255.0
   return mask
 
-def draw_section(sections, shape, section_config=[LEFT_EYE_IDX, RIGHT_EYE_IDX, OUT_LIP_IDX, IN_LIP_IDX]):
+def draw_section(sections, shape, section_config=[LEFT_EYE_IDX, LEFT_EYEBROW_IDX, RIGHT_EYE_IDX, RIGHT_EYEBROW_IDX, OUT_LIP_IDX, IN_LIP_IDX, (CHIN_IDX, False)], groups=[0, 0, 1, 1, 2, 2, 2], split=False):
     # sections: np
+    num_groups = len(set(groups))
     mask = np.zeros(shape, dtype=np.uint8)
-    for sec_idx in section_config:
+    if split == True:
+        masks = [mask.copy() for _ in range(num_groups)]
+        
+    for i, sec_idx in enumerate(section_config):
+        group = groups[i]
+        sec_mask = mask if not split else masks[group]
+        is_closed = True
+        if len(sec_idx) == 2 and not sec_idx[1]:
+            is_closed = False
+            sec_idx = sec_idx[0]
         section = sections[:len(sec_idx)]
         sections = sections[len(sec_idx):]
+        # print(f'len sections: {len(sections)}')
         # section = np.array([
         #     [128, 128],
         #     [200, 200], 
         #     [0, 0]], np.int32)
-        mask = cv2.polylines(mask, [section], True, (255, 255, 255), 1)
-    
+        _ = cv2.polylines(sec_mask, [section], is_closed, (255, 255, 255), 1)
+        
     assert len(sections) == 0
     
-    return mask
-    
+    return mask if not split else masks
+
 def get_seg(mesh_dict, shape):
     keypoints = np.array(list(mesh_dict.values())[:478])[:, :2]
     keypoints = keypoints.astype(np.int32)
@@ -303,7 +317,7 @@ def get_lip_mask(mesh_dict, shape, boundary_idx=WIDE_BOUNDARY_IDX):
     keypoints = keypoints.astype(np.int32)[boundary_idx]
     lip_mask = draw_mask(keypoints, shape)
     return lip_mask
-    
+
 def get_mesh_image(mesh, frame_shape, mask_idx=None):
     mesh_dict = mesh_tensor_to_landmarkdict(mesh)
     image_rows, image_cols = frame_shape[1], frame_shape[0]

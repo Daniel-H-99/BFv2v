@@ -7,14 +7,28 @@
 #     python crop-video.py --inp $file
 # done
 
-input_dir=result/video
-out_dir=result/gpen/
-vid=result.mp4
+# src_img_list="
+# son
+# "
+# i="1.0"
+# j="1.0"
+# conda deactivate
+
+# for src_img in $src_img_list
+# do
+#     echo "working on $src_img"
+#     conda activate fom
+#     python drive_mesh.py --checkpoint "/home/server25/minyeong_workspace/BFv2v/log_headmodel/${i}_${j}/best.tar" --coef_e_tilda $i --coef_e_prime $j --src_img asset/$src_img/frame_ugly.png --drv_vid asset/young/0_F.mp4 --res_dir result/driven_mesh/${src_img}_ugly
+# done
 
 conda deactivate
 
-# mkdir -p ${out_dir}/$vid
+ffmpeg -y -i asset/young/0_F.mp4_crop.mp4 -i result/driven_mesh/son/driving.mp4 -i result/driven_mesh/son/driven.mp4 -i result/driven_mesh/son_ugly/driven.mp4 -i result/driven_mesh/kkj/driven.mp4 -i result/driven_mesh/kkj/driven.mp4 -filter_complex \
+    "[0:v]scale=-1:256[v1]; \
+    [1:v]scale=-1:256,crop=trunc(iw/2)*2:trunc(ih/2)*2[v2];\
+    [2:v]scale=-1:256,crop=trunc(iw/2)*2:trunc(ih/2)*2[v3]; \
+    [3:v]scale=-1:256,crop=trunc(iw/2)*2:trunc(ih/2)*2[v4]; \
+    [4:v]scale=-1:256,crop=trunc(iw/2)*2:trunc(ih/2)*2[v5]; \
+    [5:v]scale=-1:256,crop=trunc(iw/2)*2:trunc(ih/2)*2[v6]; \
+    [v1][v2][v3][v4][v5][v6]hstack=inputs=6[v]" -map "[v]" -map 0:a -c:a copy result/tmp/driven_mesh.mp4
 
-# ffmpeg -y -i ${input_dir}/${vid} -vf scale=512:512 -r 25 ${out_dir}/${vid}/%05d.png
-
-ffmpeg -y -r 25 -i ${out_dir}/result_sr.mp4/%05d_GPEN.jpg -vf fps=25 ${out_dir}/result_gpen.mp4

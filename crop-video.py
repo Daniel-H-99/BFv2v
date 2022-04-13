@@ -20,7 +20,7 @@ def process_image(inp, output):
     landmarks_detector = face_alignment.FaceAlignment(face_alignment.LandmarksType._3D, flip_input=False)
 
     for i, face_landmarks in enumerate(landmarks_detector.get_landmarks(inp), start=1):
-        aligned_face_path = inp + output
+        aligned_face_path = output
         result_img = image_align(inp, face_landmarks)
         result_img.save(aligned_face_path, 'PNG')
 
@@ -83,7 +83,7 @@ def compute_bbox(start, end, fps, tube_bbox, frame_shape, inp, image_shape, outp
 
     scale = f'{image_shape[0]}:{image_shape[1]}'
 
-    return f'ffmpeg -y -i {inp} -ss {start} -t {time} -filter:v "crop={w}:{h}:{left}:{top}, scale={scale}" {inp}_{output}'
+    return f'ffmpeg -y -i {inp} -ss {start} -t {time} -filter:v "fps=25, crop={w}:{h}:{left}:{top}, scale={scale}" {output}'
 
 
 def compute_bbox_trajectories(trajectories, fps, frame_shape, args):

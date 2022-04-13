@@ -512,6 +512,12 @@ class GeneratorFullModel(torch.nn.Module):
         
         return seg_loss
 
+    def calc_coef_loss(self, mask, means):
+        # mask: B x num_priors x H x W, means: B x num_priors x 3
+        H, W = mask.shape[2:]
+        
+        return (mask ** 2).sum(dim=3).sum(dim=2).mean()
+    
     def forward(self, x):
         # kp_canonical = self.kp_extractor(x['source'])     # {'value': value, 'jacobian': jacobian}   
         # kp_canonical_source = self.kp_extractor(x['source'])     # {'value': value, 'jacobian': jacobian}   
@@ -557,8 +563,8 @@ class GeneratorFullModel(torch.nn.Module):
         
         
         generated = self.generator(x['source'], kp_source=kp_source, kp_driving=kp_driving)
-        src_section = self.concat_section(self.split_section(kp_source['value']))
-        tgt_section = self.concat_section(self.split_section(kp_source['raw_value']))
+        src_section = self.concat_section(self.split_section(kp_source['raw_value']))
+        tgt_section = self.concat_section(self.split_section(kp_driving['raw_value']))
         # print(f'src section: {src_section}')
         # print(f'drv section: {tgt_section}')
         generated['kp_source'] = {'value': src_section}
@@ -570,6 +576,33 @@ class GeneratorFullModel(torch.nn.Module):
         pyramide_real = self.pyramid(x['driving'])
         pyramide_generated = self.pyramid(generated['prediction'])
 
+
+        if self.loss_weights['coefs_match'] != 0:
+            motion = generated['move'] # B x D x H x W x 3
+            motion = motion[:, :, :, :2]  # B x H x W x 2
+            motion = motion.permute(0, 3, 1, 2) # B x 2 x H x W
+            it_section = kp_driving['intermediate_value']
+            # motion_GT = src_section[:, :, :2] # B x N x 2
+            motion_GT = kp_source['raw_value'][:, :, :2]
+            motion_section = F.grid_sample(motion, it_section[:, :, None, :2]) # B x 2 x N x 1
+            motion_section = motion_section.squeeze(-1).transpose(1, 2)
+            
+            loss_values['coefs_match'] = self.loss_weights['coefs_match'] * F.l1_loss(motion_section, motion_GT)
+            
+            it_section = self.concat_section(self.split_section(it_section))
+            motion_section = self.concat_section(self.split_section(motion_section))  
+            generated['raw_source_X'] = {'value': src_section}
+            generated['source_x'] = {'value': it_section}
+            generated['driving_x'] = {'value': motion_section}
+            del generated['kp_source']
+            del generated['kp_driving']
+            # print(f'motion shape: {motion.shape}')
+            # print(f'motion_section shape: {motion_section.shape}')
+            # print(f'motion gt shape: {motion_GT.shape}')
+            
+        if self.loss_weights['coefs'] != 0:
+            loss_values['coefs'] = self.loss_weights['coefs'] * self.calc_coef_loss(generated['coefs'], generated['means'])
+            
         if sum(self.loss_weights['perceptual']) != 0:
             value_total = 0
             for scale in self.scales:

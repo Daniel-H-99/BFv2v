@@ -7,29 +7,14 @@
 #     python crop-video.py --inp $file
 # done
 
-driving_dir="asset/young"
+driving_dir="asset/young_v2"
 
 driving_list="
-0_F.mp4
-0_R.mp4
-45_F.mp4
-45_R.mp4
-n45_F.mp4
-n45_R.mp4
-90_n90_N.mp4
-n90_90_F.mp4
-n90_90_R.mp4
-90_F.mp4
-90_R.mp4
-n90_F.mp4
-n90_R.mp4
+00010_cropped.mp4
 "
 
 source_list="
-asset,son,frame_30.png
-asset,son,frame_reference.png
-asset,kkj,30_30p.png
-asset,kkj,frame_reference.png
+asset,justin,frame_reference.png
 "
 
 conda deactivate

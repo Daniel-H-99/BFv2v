@@ -21,7 +21,10 @@ from modules.keypoint_detector import KPDetector, HEEstimator
 from animate import normalize_kp
 from scipy.spatial import ConvexHull
 from modules.headmodel import HeadModel
-from utils.util import extract_mesh
+from utils.util import extract_mesh, draw_section
+from utils.one_euro_filter import OneEuroFilter
+import cv2
+from scipy.spatial.transform import Rotation as R
 
 if sys.version_info[0] < 3:
     raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
@@ -185,9 +188,28 @@ def get_rotation_matrix(yaw, pitch, roll):
 #         jacobian_transformed = None
 
 #     return {'value': kp_transformed, 'jacobian': jacobian_transformed}
-def preprocess_dict(d):
-    return {k: v.cuda()[None] for (k, v) in d.items()}
 
+def preprocess_dict(d):
+    res = {}
+    for k, v in d.items():
+        if type(v) == torch.Tensor:
+            res[k] = v.cuda()[None]
+        elif type(v) == list:
+            res[k] = [v_i.cuda()[None] for v_i in v]
+        elif type(v) == dict:
+            res[k] = preprocess_dict(v)
+            
+    return res
+
+def get_mesh_image_section(mesh, frame_shape):
+    # mesh: N0 x 3
+    # print(f'sections shape: {sections.shape}')
+    secs = draw_section(mesh[:, :2].numpy().astype(np.int32), frame_shape, split=True) # (num_sections) x H x W x 3
+    # print(f'draw section done')
+    secs = [torch.from_numpy(sec[:, :, :1].astype(np.float32).transpose((2, 0, 1)) / 255.0) for sec in secs]
+    # print('got mesh image sections')
+    return secs
+    
 def calc_mesh_bias(mesh, head_statistics):
     sections = head_statistics['sections']
     mesh_bias = []
@@ -213,15 +235,15 @@ def make_animation(source_image, driving_video, source_mesh, driving_meshes, gen
         if not cpu:
             source = source.cuda()
             
-        driving = torch.tensor(np.array(driving_video)[np.newaxis].astype(np.float32)).permute(0, 4, 1, 2, 3)
+        # driving = torch.tensor(np.array(driving_video)[np.newaxis].astype(np.float32)).permute(0, 4, 1, 2, 3)
 
         kp_source = source_mesh
         kp_driving_initial = preprocess_dict(driving_meshes[0])
         
-        for frame_idx in tqdm(range(driving.shape[2])):
-            driving_frame = driving[:, :, frame_idx]
-            if not cpu:
-                driving_frame = driving_frame.cuda()
+        for frame_idx in tqdm(range(len(driving_meshes))):
+            # driving_frame = driving[:, :, frame_idx]
+            # if not cpu:
+            #     driving_frame = driving_frame.cuda()
             kp_driving = preprocess_dict(driving_meshes[frame_idx])
             kp_driving['mesh_bias'] = calc_mesh_bias(kp_driving, headmodel_statistics)
             kp_norm = normalize_kp(kp_source=kp_source, kp_driving=kp_driving,
@@ -232,8 +254,8 @@ def make_animation(source_image, driving_video, source_mesh, driving_meshes, gen
             predictions.append(np.transpose(out['prediction'].data.cpu().numpy(), [0, 2, 3, 1])[0])
             # print(f'kp keys: {kp_source.keys()}')
             # print(f'kp drv keys: {kp_driving.keys()}')
-            canonical.append(out['kp_source'][0].data.cpu())
-            exp.append(out['kp_driving'][0].data.cpu())
+            canonical.append(out['kp_source']['value'][0].data.cpu())
+            exp.append(out['kp_driving']['value'][0].data.cpu())
             
     return {'prediction': predictions, 'kp': {'canonical': canonical, 'exp': exp}}
 
@@ -263,19 +285,53 @@ def find_best_frame(source, driving, cpu=False):
             frame_num = i
     return frame_num
 
+def filter_mesh(meshes, c0):
+    # meshes: list of dict of mesh({R, t, c})
+    MIN_CUTOFF = 0.005
+    BETA = 0.7
+    num_frames = len(meshes)
+    fps = 25
+    
+    times = np.linspace(0, num_frames / fps, num_frames)
+    
+
+    for i, mesh in enumerate(meshes):
+        R, t, c = mesh['R'], mesh['t'], mesh['c']
+        # t_prime = (R.inverse() @ t / c.view(1, 1)).squeeze(1).numpy()
+        # x = t_prime[0]
+        # y = t_prime[1]
+        # z = t_prime[2]
+        # alpha, beta, gamma
+        # if i == 0:
+        #     x_filter = OneEuroFilter(times[0], x, min_cutoff=MIN_CUTOFF, beta=BETA)
+        #     y_filter = OneEuroFilter(times[0], y, min_cutoff=MIN_CUTOFF, beta=BETA)
+        #     z_filter = OneEuroFilter(times[0], z, min_cutoff=MIN_CUTOFF, beta=BETA)
+        # else:
+        #     x = x_filter(times[i], x)
+        #     y = y_filter(times[i], y)
+        #     z = z_filter(times[i], z)
+        
+        # bias = torch.Tensor([x, y, z]).unsqueeze(1) # 3 x 1
+        # t_tilda = c0.view(1, 1) * R @ bias
+        mesh['c'] = c0
+        # mesh['t'] = t_tilda
+        
+        
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--config", default='config/vox-256.yaml', help="path to config")
     parser.add_argument("--checkpoint", default='', help="path to checkpoint to restore")
     parser.add_argument("--checkpoint_headmodel", default='', help="path to headmodel checkpoint to restore")
-    parser.add_argument("--reference_dict", default='', help="path to reference dict to restore")
+    parser.add_argument("--reference_dict", default='mesh_dict_reference.pt', help="path to reference dict to restore")
 
     parser.add_argument("--source_image", default='', help="path to source image")
     parser.add_argument("--driving_video", default='', help="path to driving video")
     parser.add_argument("--result_video", default='result.mp4', help="path to output")
     parser.add_argument("--result_dir", default='result', help="path to result dir")
+    parser.add_argument("--driven_dir", default='result', help="path to driven data dir")
 
     parser.add_argument("--gen", default="spade", choices=["original", "spade"])
+    parser.add_argument("--ignore_emotion", action='store_true')
  
     parser.add_argument("--relative", dest="relative", action="store_true", help="use relative or absolute keypoint coordinates")
     parser.add_argument("--adapt_scale", dest="adapt_scale", action="store_true", help="adapt movement scale based on convex hull of keypoints")
@@ -305,21 +361,25 @@ if __name__ == "__main__":
 
     config['train_params']['num_kp'] = config['model_params']['common_params']['num_kp']
     config['train_params']['sections'] = config['model_params']['common_params']['sections']
+    sections = config['train_params']['sections']
     
     reference_dict = torch.load(opt.reference_dict)
     source_image = imageio.imread(opt.source_image)
-    reader = imageio.get_reader(opt.driving_video)
-    fps = reader.get_meta_data()['fps']
+    fps = 25
     driving_video = []
-    try:
-        for im in reader:
-            driving_video.append(im)
-    except RuntimeError:
-        pass
-    reader.close()
+    if len(opt.driving_video) > 0:
+        reader = imageio.get_reader(opt.driving_video)
+        try:
+            for im in reader:
+                driving_video.append(im)
+        except RuntimeError:
+            pass
+        reader.close()
 
     frame_shape = config['dataset_params']['frame_shape']
     
+    if len(source_image.shape) == 2:
+        source_image = cv2.cvtColor(source_image, cv2.COLOR_GRAY2RGB)
     source_image = resize(source_image, frame_shape[:2])[..., :3]
     driving_video = [resize(frame, frame_shape[:2])[..., :3] for frame in driving_video]
     
@@ -334,20 +394,42 @@ if __name__ == "__main__":
     source_mesh = mesh
     
     driving_meshes = []
-    for frame in driving_video:
-        mesh = extract_mesh(img_as_ubyte(frame), reference_dict)
-        A = np.array([-1, -1, 1 / 2], dtype='float32')[:, np.newaxis] # 3 x 1
-        mesh['value'] = torch.from_numpy(np.array(mesh['value'], dtype='float32') * 2 / L  + np.squeeze(A, axis=-1)[None])
-        mesh['R'] = torch.from_numpy(np.array(mesh['R'], dtype='float32'))
-        mesh['c'] = torch.from_numpy(np.array(mesh['c'], dtype='float32'))
-        t = np.array(mesh['t'], dtype='float32')
-        mesh['t'] = torch.from_numpy((np.eye(3).astype(np.float32) - mesh['c'].numpy() * mesh['R'].numpy()) @ A + t * 2 / L)
-        driving_meshes.append(mesh)    
+    if len(driving_video) > 0:
+        print("Using Given Driving Video...")
+        for frame in driving_video:
+            mesh = extract_mesh(img_as_ubyte(frame), reference_dict)
+            A = np.array([-1, -1, 1 / 2], dtype='float32')[:, np.newaxis] # 3 x 1
+            mesh['value'] = torch.from_numpy(np.array(mesh['value'], dtype='float32') * 2 / L  + np.squeeze(A, axis=-1)[None])
+            mesh['R'] = torch.from_numpy(np.array(mesh['R'], dtype='float32'))
+            mesh['c'] = torch.from_numpy(np.array(mesh['c'], dtype='float32'))
+            t = np.array(mesh['t'], dtype='float32')
+            mesh['t'] = torch.from_numpy((np.eye(3).astype(np.float32) - mesh['c'].numpy() * mesh['R'].numpy()) @ A + t * 2 / L)
+            driving_meshes.append(mesh)    
+    else:
+        print("Using Pre-driven Data...")
+        driven_meshes = torch.load(os.path.join(opt.driven_dir, 'result', 'driven_meshes.pt'))
+        for driven_mesh in driven_meshes:
+            mesh = {}
+            section_indices = []
+            for sec in sections:
+                section_indices.extend(sec[0])
+            mesh['value'] = driven_mesh['value'][0].cpu()
+            mesh['R'] = driven_mesh['R'][0].cpu()
+            mesh['c'] = driven_mesh['c'][0].cpu()
+            mesh['t'] = driven_mesh['t'][0].cpu()
+            mesh['value'][section_indices] = driven_mesh['driven_sections'].cpu()
+            target_mesh = (1 / source_mesh['c'][None, None]) * torch.einsum('ij,nj->ni', source_mesh['R'].inverse(), driven_mesh['driven_sections'].cpu() - source_mesh['t'][None, :, 0])
+            target_mesh = L * (target_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
+            mesh['intermediate_mesh_img_sec'] = get_mesh_image_section(target_mesh, frame_shape)
+            driving_meshes.append(mesh)
         
+    # use one euro filter for denoising
+    filter_mesh(driving_meshes, source_mesh['c'])
+    
     generator, headmodel = load_checkpoints(config=config, checkpoint_path=opt.checkpoint, checkpoint_headmodel_path=opt.checkpoint_headmodel, gen=opt.gen, cpu=opt.cpu)
+    generator.ignore_emotion = opt.ignore_emotion
 
-
-        
+    print(f'Generator Ignorance: {generator.ignore_emotion}')
     estimate_jacobian = config['model_params']['common_params']['estimate_jacobian']
     print(f'estimate jacobian: {estimate_jacobian}')
 
@@ -358,8 +440,8 @@ if __name__ == "__main__":
         driving_backward = driving_video[:(i+1)][::-1]
         driving_meshes_forward = driving_meshes[i:]
         driving_meshes_backward = driving_meshes[:(i+1)][::-1]
-        output_forward = make_animation(source_image, driving_forward, source_mesh, driving_meshes_forward, generator, headmodel, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, estimate_jacobian=estimate_jacobian, cpu=opt.cpu, free_view=opt.free_view, yaw=opt.yaw, pitch=opt.pitch, roll=opt.roll)
-        output_backward = make_animation(source_image, driving_backward, source_mesh, driving_meshes_backward, generator, headmodel, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, estimate_jacobian=estimate_jacobian, cpu=opt.cpu, free_view=opt.free_view, yaw=opt.yaw, pitch=opt.pitch, roll=opt.roll)
+        output_forward = make_animation(source_image, driving_forward, source_mesh, driving_meshes_forward, generator, headmodel, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, estimate_jacobian=estimate_jacobian, cpu=opt.cpu, free_view=opt.free_view, yaw=opt.yaw, pitch=opt.pitch, roll=opt.roll, ignore_emotion=ignore_emotion)
+        output_backward = make_animation(source_image, driving_backward, source_mesh, driving_meshes_backward, generator, headmodel, relative=opt.relative, adapt_movement_scale=opt.adapt_scale, estimate_jacobian=estimate_jacobian, cpu=opt.cpu, free_view=opt.free_view, yaw=opt.yaw, pitch=opt.pitch, roll=opt.roll, ignore_emotion=eignore_emotion)
         predictions = output_backward['prediction'][::-1] + output_forward['prediction'][1:]
         kps = {k: (output_backward['kp'][k][::-1] + output_forward['kp'][k][1:]) for k in ('canonical', 'exp')}
     else:

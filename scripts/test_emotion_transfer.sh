@@ -9,32 +9,37 @@
 
 coef_e_tilda="
 1.0
-1.5
-2.0
 "
 
 coef_e_prime="
 1.0
-1.5
-2.0
 "
 conda deactivate
 
-for i in $coef_e_tilda
+label="no_k_e_loss"
+checkpoint="log_headmodel/${label}"
+source_dir=asset/celeb
+driving_dir=asset/young_v2
+
+
+for source_image in $source_dir/*
 do 
-    for j in $coef_e_prime
+    for driving_video in $driving_dir/*
     do
-        echo "working on $i / $j"
+        # source_image="asset/celeb/W_00001_cropped.png"
+        echo "working on $source_image / $driving_video"
+        vid=$(basename $source_image .png)_$(basename $driving_video .mp4).mp4
         conda activate fom
-        python drive_mesh.py --checkpoint "/home/server25/minyeong_workspace/BFv2v/log_headmodel/${i}_${j}/best.tar" --coef_e_tilda $i --coef_e_prime $j --src_img asset/son/frame_reference.png --drv_vid asset/young/0_F.mp4
+        python drive_mesh.py --checkpoint "${checkpoint}/best.tar" --src_img "$source_image" --drv_vid "$driving_video"
         conda deactivate
-        ffmpeg -y -i asset/son/frame_reference.png -i log_headmodel/${i}_${j}/result/source_raw.mp4 -i log_headmodel/${i}_${j}/result/source.mp4 -i asset/young/0_F.mp4 -i log_headmodel/${i}_${j}/result/driving.mp4 -i log_headmodel/${i}_${j}/result/driven.mp4 -filter_complex \
+        mkdir -p result/$label_v2
+        ffmpeg -y -i "$source_image" -i "${checkpoint}"/result/source_raw.mp4 -i "${checkpoint}"/result/source.mp4 -i "$driving_video" -i "${checkpoint}"/result/driving.mp4 -i "${checkpoint}"/result/driven.mp4 -filter_complex \
             "[0:v]scale=-1:256[v1]; \
             [1:v]scale=-1:256,crop=trunc(iw/2)*2:trunc(ih/2)*2[v2];\
             [2:v]scale=-1:256,crop=trunc(iw/2)*2:trunc(ih/2)*2[v3]; \
             [3:v]scale=-1:256,crop=trunc(iw/2)*2:trunc(ih/2)*2[v4]; \
             [4:v]scale=-1:256,crop=trunc(iw/2)*2:trunc(ih/2)*2[v5]; \
             [5:v]scale=-1:256,crop=trunc(iw/2)*2:trunc(ih/2)*2[v6]; \
-            [v1][v2][v3][v4][v5][v6]hstack=inputs=6[v]" -map "[v]" log_headmodel/${i}_${j}/result/compare_${i}_${j}.mp4
+            [v1][v2][v3][v4][v5][v6]hstack=inputs=6[v]" -map "[v]" result/$label_v2/$vid
     done
 done
