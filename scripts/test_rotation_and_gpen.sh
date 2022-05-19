@@ -15,9 +15,9 @@ checkpoint_headmodel=log_headmodel/1.0_1.0/best.tar
 source_image=asset/justin/frame_reference.png
 driving_video=asset/young/0_F.mp4_crop.mp4
 
-conda deactivate
-conda activate fom
-python demo.py --config config/vox-256-renderer.yaml --checkpoint "${checkpoint}" --source_image $source_image --driving_video $driving_video --checkpoint_headmodel $checkpoint_headmodel --result_vid $vid --ignore_emotion
+# conda deactivate
+# conda activate fom
+# python demo.py --config config/vox-256-renderer.yaml --checkpoint "${checkpoint}" --source_image $source_image --driving_video $driving_video --checkpoint_headmodel $checkpoint_headmodel --result_vid $vid --ignore_emotion
 
 
 conda deactivate

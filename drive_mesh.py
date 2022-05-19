@@ -1,8 +1,10 @@
+import re
 import matplotlib
 
 matplotlib.use('Agg')
 import math
 import os, sys
+import glob
 import yaml
 from argparse import ArgumentParser
 from time import gmtime, strftime
@@ -28,12 +30,36 @@ from frames_dataset import DatasetRepeater
 from sync_batchnorm import DataParallelWithCallback
 
 from utils.util import draw_section
+from utils.one_euro_filter import OneEuroFilter
 import imageio
 
 import torch.nn as nn
 from modules.headmodel import HeadModel     
+
+def filter_values(values):
+    MIN_CUTOFF = 0.001
+    BETA = 0.07
+    num_frames = len(values)
+    fps = 25
+    times = np.linspace(0, num_frames / fps, num_frames)
     
-def main(config, model, res_dir, src_dataset, drv_dataset):
+    filtered_values= []
+    
+    values = values
+    for i, x in enumerate(values):
+        if i == 0:
+            filter_value = OneEuroFilter(times[0], x, min_cutoff=MIN_CUTOFF, beta=BETA)
+        else:
+            x = filter_value(times[i], x)
+        
+        filtered_values.append(x)
+        
+    res = np.array(filtered_values)
+    
+    res = res
+    return res
+
+def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None):
     train_params = config['train_params']    
     
     src_dataloader = DataLoader(src_dataset, batch_size=1, shuffle=False, num_workers=0, drop_last=False)
@@ -47,7 +73,7 @@ def main(config, model, res_dir, src_dataset, drv_dataset):
         params_drv = model.module.estimate_params(drv_data)  # x: (num_sections) x N * 3, e: (num_sections) x B x N * 3, k_e: (num_sections) x N * 3
         x_drv, e_drv, k_e_drv = params_drv['x'], params_drv['e'], params_drv['k_e']
         e_normalized = [e_drv_sec / k_e_drv[i][None] for i, e_drv_sec in enumerate(e_drv)]
-        params_src = model.module.estimate_params_v2(src_data, e_normalized)
+        params_src = model.module.estimate_params_v2(src_data, e_normalized, threshold=threshold)
         # params_src = model.module.estimate_params(src_data)  # x: (num_sections) x N * 3, e: (num_sections) x B x N * 3, k_e: (num_sections) x N * 3
         x_src, e_src, k_e_src = params_src['x'], params_src['e'], params_src['k_e']
         
@@ -55,17 +81,35 @@ def main(config, model, res_dir, src_dataset, drv_dataset):
     driven_frames = []
     src_frames = []
     driven_meshes = []
+    
+    # filtering noise
+    MIN_CUTOFF = 0.001
+    BETA = 0.7
+    num_frames = len(drv_dataloader)
+    fps = 25
+    times = np.linspace(0, num_frames / fps, num_frames)
         
-    for drv_data in tqdm(drv_dataloader):
+    for i, drv_data in enumerate(tqdm(drv_dataloader)):
         with torch.no_grad():
             src, drv, driven = model.module.drive(drv_data, x_src, k_e_src, x_drv=x_drv, k_e_drv=k_e_drv)
         A = np.array([-1, -1, 1 / 2]).astype('float32')[np.newaxis]
         driven_mesh = config['dataset_params']['frame_shape'][0] * (driven.detach().cpu().numpy() - A) // 2   # total_section_values x 3
+
+        driven_mesh_shape = driven_mesh.shape
+        x = driven_mesh.reshape(-1)
+        
+        if i == 0:
+            filter_value = OneEuroFilter(times[0], x, min_cutoff=MIN_CUTOFF, beta=BETA)
+        else:
+            x = filter_value(times[i], x)
+        
+        driven_mesh = x.reshape(driven_mesh_shape)
+        
         driving_mesh = config['dataset_params']['frame_shape'][0] * (drv.detach().cpu().numpy() - A) // 2   # total_section_values x 3
-        driven_frame = draw_section(driven_mesh[:, :2].astype('uint'), config['dataset_params']['frame_shape'])
-        driving_frame = draw_section(driving_mesh[:, :2].astype('uint'), config['dataset_params']['frame_shape'])
+        driven_frame = draw_section(driven_mesh[:, :2].astype('int32'), config['dataset_params']['frame_shape'])
+        driving_frame = draw_section(driving_mesh[:, :2].astype('int32'), config['dataset_params']['frame_shape'])
         src_mesh = config['dataset_params']['frame_shape'][0] * (src.detach().cpu().numpy() - A) // 2   # total_section_values x 3
-        src_frame = draw_section(src_mesh[:, :2].astype('uint'), config['dataset_params']['frame_shape'])
+        src_frame = draw_section(src_mesh[:, :2].astype('int32'), config['dataset_params']['frame_shape'])
 
         driven_frames.append(driven_frame)
         driving_frames.append(driving_frame)
@@ -75,7 +119,7 @@ def main(config, model, res_dir, src_dataset, drv_dataset):
         driven_meshes.append(driven_mesh_dict)
         
     src_raw_mesh = config['dataset_params']['frame_shape'][0] * (model.module.concat_section(model.module.split_section(src_data['mesh']['value'])).detach().cpu().numpy()[0] + 1) // 2 
-    src_raw_frame = draw_section(src_raw_mesh[:, :2].astype('uint'), config['dataset_params']['frame_shape'])
+    src_raw_frame = draw_section(src_raw_mesh[:, :2].astype('int32'), config['dataset_params']['frame_shape'])
     src_raw_frames = [src_raw_frame] * len(src_frames)
     
     imageio.mimsave(os.path.join(res_dir, 'driving.mp4'), driving_frames, fps=25)
@@ -89,9 +133,9 @@ if __name__ == "__main__":
     print('running')
     if sys.version_info[0] < 3:
         raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
-    os.environ['CUDA_VISIBLE_DEVICES']='1'
+    os.environ['CUDA_VISIBLE_DEVICES']='3'
     parser = ArgumentParser()
-    parser.add_argument("--config", default="config/vox-256.yaml", help="path to config")
+    parser.add_argument("--config", default=None, help="path to config")
     parser.add_argument("--mode", default="train", choices=["train",])
     parser.add_argument("--gen", default="spade", choices=["original", "spade"])
     parser.add_argument("--log_dir", default='log_headmodel', help="path to log into")
@@ -106,12 +150,24 @@ if __name__ == "__main__":
     parser.add_argument("--src_img", type=str, required=True)
     parser.add_argument("--drv_vid", type=str, required=True)
     parser.add_argument("--res_dir", type=str)
+    parser.add_argument("--threshold", type=float)
     
     opt = parser.parse_args()
+
+    if opt.config is None:
+        opt.config = glob.glob(os.path.join(os.path.dirname(opt.checkpoint), '*.yaml'))[0]
+
     with open(opt.config) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
         
-    config['train_params']['sections'] = config['model_params']['common_params']['sections']
+    # united single segment
+    sections = config['model_params']['common_params']['headmodel_sections']
+    for sec in sections:
+        # print(f'seciton: {sec}')
+        if len(sec[0]) == 0:
+            sec[0] = list(range(478))
+            
+    config['train_params']['headmodel_sections'] = config['model_params']['common_params']['headmodel_sections']
     config['train_params']['coef_e_tilda'] = opt.coef_e_tilda
     config['train_params']['coef_e_prime'] = opt.coef_e_prime
     
@@ -132,5 +188,5 @@ if __name__ == "__main__":
     print(f'Drv Dataset Size: {len(drv_dataset)}')    
     
     
-    main(config, model, res_dir, src_dataset, drv_dataset)
+    main(config, model, res_dir, src_dataset, drv_dataset, threshold=opt.threshold)
 

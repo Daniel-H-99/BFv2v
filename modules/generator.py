@@ -160,8 +160,8 @@ class SPADEDecoder(nn.Module):
 
 class OcclusionAwareSPADEGenerator(nn.Module):
 
-    def __init__(self, image_channel, feature_channel, num_kp, sections, block_expansion, max_features, num_down_blocks, reshape_channel, reshape_depth,
-                 num_resblocks, estimate_occlusion_map=False, dense_motion_params=None, estimate_jacobian=False, ignore_emotion=False):
+    def __init__(self, image_channel, feature_channel, num_kp, sections, headmodel_sections, block_expansion, max_features, num_down_blocks, reshape_channel, reshape_depth,
+                 num_resblocks, estimate_occlusion_map=False, dense_motion_params=None, estimate_jacobian=False, ignore_emotion=False, headmodel=None):
         super(OcclusionAwareSPADEGenerator, self).__init__()
 
         self.sections = sections
@@ -169,14 +169,15 @@ class OcclusionAwareSPADEGenerator(nn.Module):
         
         if dense_motion_params is not None:
             self.dense_motion_network = DenseMotionNetwork(num_kp=num_kp, sections=sections, feature_channel=feature_channel,
-                                                           estimate_occlusion_map=estimate_occlusion_map,
+                                                           estimate_occlusion_map=estimate_occlusion_map, headmodel=headmodel, 
                                                            **dense_motion_params)
         else:
             self.dense_motion_network = None
 
-        self.face_mover = FaceMover(num_kp=num_kp, sections=sections, feature_channel=feature_channel,
-                                                           estimate_occlusion_map=estimate_occlusion_map,
-                                                           **dense_motion_params)
+        # self.face_mover = FaceMover(num_kp=num_kp, sections=sections, feature_channel=feature_channel,
+        #                                                    estimate_occlusion_map=estimate_occlusion_map,
+        #                                                    headmodel=headmodel,
+        #                                                    **dense_motion_params)
         self.first = SameBlock2d(image_channel, block_expansion, kernel_size=(3, 3), padding=(1, 1))
 
         down_blocks = []
@@ -206,6 +207,8 @@ class OcclusionAwareSPADEGenerator(nn.Module):
 
         self.ignore_emotion = ignore_emotion
         
+
+            
     def deform_input(self, inp, deformation):
         _, d_old, h_old, w_old, _ = deformation.shape
         _, _, d, h, w = inp.shape
@@ -218,13 +221,17 @@ class OcclusionAwareSPADEGenerator(nn.Module):
     def forward(self, source_image, kp_driving, kp_source):
         # Encoding (downsampling) part
         output_dict = {}
-        out = self.first(source_image)
+    
+        # moved = self.face_mover(kp_source, kp_driving, source_image, source_image)
+        # output_dict = moved
+        # out = moved['moved_feature']
+        # del output_dict['moved_feature']
+        
+        out = source_image
+        out = self.first(out)
         
         # if False:
-        moved = self.face_mover(kp_source, kp_driving, out, source_image)
-        output_dict = moved
-        out = moved['moved_feature']
-        del output_dict['moved_feature']
+
         
         for i in range(len(self.down_blocks)):
             out = self.down_blocks[i](out)
@@ -242,6 +249,7 @@ class OcclusionAwareSPADEGenerator(nn.Module):
             output_dict['heatmap'] = dense_motion['heatmap']
             output_dict['kp_source'] = dense_motion['kp_source']
             output_dict['kp_driving'] = dense_motion['kp_driving']
+
             if 'occlusion_map' in dense_motion:
                 occlusion_map = dense_motion['occlusion_map']
                 output_dict['occlusion_map'] = occlusion_map
@@ -252,6 +260,16 @@ class OcclusionAwareSPADEGenerator(nn.Module):
 
             bs, c, d, h, w = out.shape
             out = out.view(bs, c*d, h, w)
+            
+            if 'mouth_img' in kp_driving:
+                print(f'mouth img exists')
+                mouth = kp_driving['mouth_img']
+                if out.shape[2] != mouth.shape[2] or out.shape[3] != mouth.shape[3]:
+                    mouth = F.interpolate(mouth, size=out.shape[2:], mode='bilinear')
+                out = torch.cat([mouth, out], dim=1)
+            else:
+                print(f'mouth img not exists')
+
             out = self.third(out)
             out = self.fourth(out)
 
@@ -262,7 +280,7 @@ class OcclusionAwareSPADEGenerator(nn.Module):
 
         # Decoding part
         out = self.decoder(out)
-
+        output_dict['deformation'] = deformation # B x d x h x w x 3
         output_dict["prediction"] = out
 
         return output_dict

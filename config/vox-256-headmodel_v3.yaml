@@ -15,8 +15,8 @@ dataset_params:
 
 model_params:
   common_params:
-    num_kp: 20
-    headmodel_sections:  [[[384, 385, 386, 387, 388, 390, 263, 362, 398, 466, 373, 374, 249, 380, 381, 382, 336, 285, 295, 282, 283, 276, 300, 293, 334, 296], 10], [[160, 33, 161, 163, 133, 7, 173, 144, 145, 246, 153, 154, 155, 157, 158, 159, 70, 46, 53, 52, 65, 55, 107, 66, 105, 63], 10], [[181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185, 61, 146, 91, 178, 87, 14, 317, 402, 318, 324, 308, 415, 310, 311, 312, 13, 82, 81, 80, 191, 78, 95, 88, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136], 20]]
+    num_kp: 80
+    headmodel_sections:  [[[], 80]]
     image_channel: 3                    
     feature_channel: 32
     estimate_jacobian: False   # True
@@ -57,7 +57,7 @@ model_params:
 train_params:
   sigma_err: 0.0001
   pca_update_freq: 100
-  num_epochs: 15
+  num_epochs: 10
   num_repeats: 1
   epoch_milestones: [180,]
   lr_generator: 2.0e-4
@@ -66,7 +66,7 @@ train_params:
   lr_he_estimator: 2.0e-4
   lr_headmodel: 2.0e-4
   gan_mode: 'hinge'    # hinge or ls
-  batch_size: 30
+  batch_size: 64
   scales: [1, 0.5, 0.25, 0.125]
   checkpoint_freq: 2
   hopenet_snapshot: 'ckpt/hopenet_robust_alpha1.pkl'

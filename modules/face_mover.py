@@ -14,17 +14,23 @@ class FaceMover(nn.Module):
     """
 
     def __init__(self, block_expansion, num_blocks, sections, max_features, num_kp, feature_channel, reshape_depth, compress,
-                 estimate_occlusion_map=False):
+                 headmodel=None, estimate_occlusion_map=False):
         super(FaceMover, self).__init__()
         # self.hourglass = Hourglass(block_expansion=block_expansion, in_features=(num_kp+1)*(feature_channel+1), max_features=max_features, num_blocks=num_blocks)
         self.hourglass = Hourglass(block_expansion=block_expansion, in_features=(3 + 1), max_features=max_features // 2, num_blocks=num_blocks, is_2D=True)
         
         self.masks = nn.ModuleList()
         
+        self.masks.append(nn.Sequential(
+            nn.Conv2d(self.hourglass.out_filters, 1, kernel_size=3, padding=1),
+            # nn.Sigmoid()
+        ))
+        
         for sec in sections:
             self.masks.append(nn.Sequential(
                 nn.Conv2d(self.hourglass.out_filters, sec[1], kernel_size=3, padding=1),
-                nn.Sigmoid()))
+                # nn.Sigmoid()
+            ))
         
         self.pyramid = AntiAliasInterpolation2d(sum([sec[1] for sec in sections]), 0.25)
         self.num_kp = num_kp
@@ -35,62 +41,81 @@ class FaceMover(nn.Module):
         self.prior_extractors = nn.ModuleList()
         for i, sec in enumerate(self.sections):
             self.prior_extractors.append(nn.Sequential(
-                nn.Linear(3 * len(sec[0]), 128),
-                nn.ReLU(),
-                nn.Linear(128, 3 * sec[1]),
+                nn.Linear(3 * len(sec[0]), 256),
+                # nn.LayerNorm([256]),
+                nn.Dropout(p=0.3),
+                nn.Tanh(),
+                nn.Linear(256, 256),
+                # nn.LayerNorm([256]),
+                nn.Dropout(p=0.3),
+                nn.Tanh(),
+                nn.Linear(256, 3 * sec[1]),
                 nn.Tanh()
             ))
         
+        headmodel_sections = []
+        for k, v in headmodel.items():
+            if k == 'sections':
+                continue
+            if 'mu_x' in k:
+                headmodel_sections.append(v)
+                # print(f'v shape {v.shape}')
+        headmodel_sections = torch.cat(headmodel_sections, dim=0)
+        
+        for i, sec in enumerate(self.sections):
+            headmodel_section = headmodel_sections[:3 * len(sec[0])]
+            headmodel_sections = headmodel_sections[3 * len(sec[0]):]
+            self.register_buffer(f'headmodel_mu_x_{i}', headmodel_section)
+            
 
     def extract_coef(self, kp, src_image):
         bs = kp['intermediate_mesh_img_sec'][0].shape[0]
         section_images = torch.cat([torch.cat([src_image, sec], dim=1) for sec in kp['intermediate_mesh_img_sec']], dim=0)
+        # section_images = section_images.repeat(2, 1, 1, 1)
+        section_images = torch.cat([section_images[:1], section_images], dim=0)
         features = self.hourglass(section_images).split(bs, dim=0)
         coefs = []
+        # print(f"mask length: {len(self.masks)}")
+        # print(f"features length: {len(features)}")
         for i, f in enumerate(features):
-            coef = self.masks[i](nn.ReLU()(f))
+            coef = self.masks[i](f)
+            # print(f'coef shape: {coef.shape}')
             coefs.append(coef)
         coefs = torch.cat(coefs, dim=1)
-        
-        return coefs
+
+        coefs = coefs.permute(0, 2, 3, 1)
+        # print(f'coef raw shape: {coefs.shape}')
+        coefs = torch.nn.Softmax(dim=-1)(coefs)
+        coefs = coefs.permute(0, 3, 1, 2)
+        return coefs[:, 1:]
     
     def extract_delta(self, kp_source, kp_driving):
-        prior_driving, means = self.extract_prior(kp_driving)
-        prior_source, _ = self.extract_prior(kp_source)
+        prior_driving = self.extract_prior(kp_driving)
+        prior_source = self.extract_prior(kp_source)
         # prior_source, _ = self.extract_prior(kp_source, MEANS=means)
         rotated_prior_driving = torch.einsum('bij,bnj->bni', kp_source['R'].inverse() / kp_source['c'][:, None, None], prior_driving - kp_source['t'][:, None, :, 0])
         rotated_prior_source = torch.einsum('bij,bnj->bni', kp_source['R'].inverse() / kp_source['c'][:, None, None], prior_source - kp_source['t'][:, None, :, 0])
         delta = rotated_prior_source - rotated_prior_driving
         delta = delta[:, :, :2]
         
-        return delta, means
+        return {'value': delta, 'prior_driving': prior_driving, 'prior_source': prior_source}
         
-    def extract_prior(self, kp, use_intermediate=False, MEANS=None):
+    def extract_prior(self, kp, use_intermediate=False):
         mesh = kp['value'] if not use_intermediate else kp['intermediate_value'] # B x N x 3
         bs = len(mesh)
-        if MEANS is None:
-            secs, ms = self.split_section_and_normalize(mesh) # (num_sections) x B x n x 3, (num_sections) x B x 3
-            means = []
-        else:
-            secs = self.split_section(mesh)
-            ms = MEANS.split([sec[1] for sec in self.sections], dim=1)
-            
+        
         priors = []
         
+        secs = self.split_section(mesh)
+        
         for i, sec in enumerate(secs):
-            if MEANS is not None:
-                sec = sec - ms[i][:, [0]]
-            prior = self.prior_extractors[i](sec.flatten(1)).view(bs, -1, 3) # B x num_prior x 2
+            sec = sec.flatten(1) - getattr(self, f'headmodel_mu_x_{i}')[None]
+            prior = self.prior_extractors[i](sec).view(bs, -1, 3) # B x num_prior x 2
             priors.append(prior)
-            if MEANS is None:
-                means.append(ms[i].unsqueeze(1).repeat(1, prior.shape[1], 1))   # B x num_priors x 3
-        priors = torch.cat(priors, dim=1)
-        if MEANS is None:
-            means = torch.cat(means, dim=1)
-        else:
-            means = MEANS
             
-        return priors, means
+        priors = torch.cat(priors, dim=1)
+            
+        return priors
     
     def split_section(self, X):
         res = []
@@ -230,9 +255,14 @@ class FaceMover(nn.Module):
         
         # delta = source_priors - driving_priors # B x num_priors x  2
         
-        delta, means = self.extract_delta(kp_source, kp_driving)
-        out['means'] = means
+        delta = self.extract_delta(kp_source, kp_driving)
+        out['priors'] = torch.cat([delta['prior_source'], delta['prior_driving']], dim=0)
+        delta = delta['value']
         
+        # print(f'delta shape: {delta.shape}')
+        # print(f'coef shape: {coefs.shape}')
+        print(f'coef shape {coefs.shape}')
+        print(f'delta shape {delta.shape}')
         move = torch.einsum('bphw,bpn->bnhw', coefs, delta)   # B x 2 x H x W
         move = move.permute(0, 2, 3, 1) # B x H x W x 2
         # move = torch.cat([move, torch.zeros_like(move[:, :, :, :1])], dim=3) # B x H x W x 2

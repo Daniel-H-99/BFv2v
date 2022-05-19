@@ -42,7 +42,7 @@ def main(config, model, log_dir, dataset, eval_dataset=None):
 
     dataloader = DataLoader(dataset, batch_size=train_params['batch_size'], shuffle=True, num_workers=0, drop_last=True)
     if eval_dataset is not None:
-        eval_dataloader = DataLoader(eval_dataset, batch_size=10, shuffle=False, num_workers=0, drop_last=False)
+        eval_dataloader = DataLoader(eval_dataset, batch_size=30, shuffle=False, num_workers=0, drop_last=False)
     else:
         eval_dataloader = None
         
@@ -123,7 +123,7 @@ if __name__ == "__main__":
         raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
     os.environ['CUDA_VISIBLE_DEVICES']='1'
     parser = ArgumentParser()
-    parser.add_argument("--config", default="config/vox-256-headmodel_v2.yaml", help="path to config")
+    parser.add_argument("--config", default="config/vox-256-headmodel_v4.yaml", help="path to config")
     parser.add_argument("--mode", default="train", choices=["train",])
     parser.add_argument("--gen", default="spade", choices=["original", "spade"])
     parser.add_argument("--log_dir", default='log_headmodel', help="path to log into")
@@ -133,13 +133,26 @@ if __name__ == "__main__":
                         help="Names of the devices comma separated.")
     parser.add_argument("--verbose", dest="verbose", action="store_true", help="Print model architecture")
     parser.set_defaults(verbose=False)
+    parser.add_argument("--num_pc", default=None)
     parser.add_argument("--coef_e_tilda", type=float, default=1.0)
     parser.add_argument("--coef_e_prime", type=float, default=1.0)
     
     opt = parser.parse_args()
     with open(opt.config) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
-        
+        if opt.num_pc is not None:
+            num_pc_per_section = opt.num_pc.split(',')
+            for sec, pc in zip(config['model_params']['common_params']['headmodel_sections'], num_pc_per_section):
+                sec[1] = int(pc)
+            
+    # united single segment
+    sections = config['model_params']['common_params']['headmodel_sections']
+    for sec in sections:
+        # print(f'seciton: {sec}')
+        if len(sec[0]) == 0:
+            sec[0] = list(range(478))
+
+    config['train_params']['headmodel_sections'] = config['model_params']['common_params']['headmodel_sections']
     config['train_params']['sections'] = config['model_params']['common_params']['sections']
     config['train_params']['coef_e_tilda'] = opt.coef_e_tilda
     config['train_params']['coef_e_prime'] = opt.coef_e_prime
@@ -149,12 +162,18 @@ if __name__ == "__main__":
     model = HeadModel(config['train_params']).cuda()
     
     if opt.checkpoint is not None:
-        log_dir = os.path.join(*os.path.split(opt.checkpoint)[:-1])
+        log_dir = opt.checkpoint
     else:
         log_dir = os.path.join(opt.log_dir, os.path.basename(opt.config).split('.')[0])
         log_dir += ' {} {}'.format(opt.coef_e_tilda, opt.coef_e_prime)
         log_dir += ' ' + strftime("%d_%m_%y_%H.%M.%S", gmtime())
-        
+    
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+
+    with open(os.path.join(log_dir, 'config.yaml'), 'w') as f:
+        yaml.dump(config,f)
+
     print(f'Dataset Size: {len(dataset)}')
     print(f'Eval Dataset Size: {len(eval_dataset)}')    
     

@@ -17,6 +17,8 @@ from ffhq_align import image_align
 
 def process_image(inp, output):
     # image align
+    # print(f'image shape: {inp.shape}')
+
     landmarks_detector = face_alignment.FaceAlignment(face_alignment.LandmarksType._3D, flip_input=False)
 
     for i, face_landmarks in enumerate(landmarks_detector.get_landmarks(inp), start=1):
@@ -101,6 +103,7 @@ def process_video(args):
     video = imageio.get_reader(args.inp)
     if 'fps' not in video.get_meta_data():
         process_image(inp=args.inp, output=args.output)
+        return []
     else:
         trajectories = []
         previous_frame = None
@@ -146,8 +149,8 @@ def process_video(args):
                         current_trajectory[1] = join(current_trajectory[1], bbox)
 
 
-        except IndexError as e:
-            raise (e)
+        except Exception as e:
+            print (e)
 
         commands += compute_bbox_trajectories(trajectories, fps, frame_shape, args)
 
@@ -170,6 +173,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     commands = process_video(args)
+    print(f'Commands: {len(commands)}')
     print(commands)
     if commands is not None:
         for command in commands:

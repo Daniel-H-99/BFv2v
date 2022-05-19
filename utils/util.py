@@ -17,7 +17,7 @@ import mediapipe.python.solutions.drawing_styles as mp_drawing_styles
 from tqdm import tqdm
 import cv2
 from scipy.interpolate import LinearNDInterpolator
-
+from scipy.spatial.transform import Rotation as R
 
 def normalized_to_pixel_coordinates(landmark_dict, image_width, image_height):
     def is_valid_normalized_value(value):
@@ -74,11 +74,13 @@ MASK_IDX = [0, 11, 12, 13, 14, 15, 16, 17, 18, 32, 36, 37, 38, 39, 40, 41, 42, 4
 WIDE_MASK_IDX = [0, 2, 11, 12, 13, 14, 15, 16, 17, 18, 32, 36, 37, 38, 39, 40, 41, 42, 43, 47, 48, 49, 50, 57, 59, 60, 61, 62, 64, 72, 73, 74, 75, 76, 77, 78, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 95, 96, 97, 98, 99, 100, 101, 102, 106, 111, 114, 116, 117, 118, 119, 120, 121, 123, 126, 128, 129, 131, 135, 136, 137, 138, 140, 142, 146, 147, 148, 149, 150, 152, 164, 165, 166, 167, 169, 170, 171, 172, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 191, 192, 194, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 219, 235, 240, 262, 266, 267, 268, 269, 270, 271, 272, 273, 277, 278, 279, 280, 287, 290, 291, 292, 294, 302, 303, 304, 305, 306, 307, 308, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 324, 325, 326, 327, 328, 329, 330, 331, 335, 346, 347, 348, 349, 350, 352, 355, 358, 360, 364, 365, 367, 369, 371, 375, 376, 377, 378, 379, 391, 393, 394, 395, 396, 397, 400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 415, 416, 418, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 455, 460]
 LEFT_EYE_IDX = [384, 385, 386, 387, 388, 390, 263, 362, 398, 466, 373, 374, 249, 380, 381, 382]
 RIGHT_EYE_IDX = [160, 33, 161, 163, 133, 7, 173, 144, 145, 246, 153, 154, 155, 157, 158, 159]
+_LEFT_EYE_IDX = [382, 362, 398, 384, 385, 386, 387, 388, 466, 263, 249, 390, 373, 374, 380, 381]
+_RIGHT_EYE_IDX = [159, 160, 161, 246, 33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158]
 CONTOUR_IDX = [0, 7, 10, 13, 14, 17, 21, 33, 37, 39, 40, 46, 52, 53, 54, 55, 58, 61, 63, 65, 66, 67, 70, 78, 80, 81, 82, 84, 87, 88, 91, 93, 95, 103, 105, 107, 109, 127, 132, 133, 136, 144, 145, 146, 148, 149, 150, 152, 153, 154, 155, 157, 158, 159, 160, 161, 162, 163, 172, 173, 176, 178, 181, 185, 191, 234, 246, 249, 251, 263, 267, 269, 270, 276, 282, 283, 284, 285, 288, 291, 293, 295, 296, 297, 300, 308, 310, 311, 312, 314, 317, 318, 321, 323, 324, 332, 334, 336, 338, 356, 361, 362, 365, 373, 374, 375, 377, 378, 379, 380, 381, 382, 384, 385, 386, 387, 388, 389, 390, 397, 398, 400, 402, 405, 409, 415, 454, 466]
 ROI_IDX = LIP_IDX + LEFT_EYE_IDX + RIGHT_EYE_IDX
 LEFT_EYEBROW_IDX = [336, 285, 295, 282, 283, 276, 300, 293, 334, 296]
 RIGHT_EYEBROW_IDX = [70, 46, 53, 52, 65, 55, 107, 66, 105, 63]
-CHIN_IDX = [379, 378, 400, 377, 152, 148, 176, 149, 150, 136]
+CHIN_IDX = [365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136]
 
 def create_dir(dir_name):
     if not os.path.exists(dir_name):
@@ -254,13 +256,16 @@ def edge2color(edge_index):
 def draw_lips(keypoints, new_img, c = (255, 255, 255), th=1):
     keypoints = keypoints.astype(np.int32)
     for i in range(48, 59):
-	    cv2.line(new_img, tuple(keypoints[i]), tuple(keypoints[i+1]), color=c, thickness=th)
+        cv2.line(new_img, tuple(keypoints[i]), tuple(keypoints[i+1]), color=c, thickness=th)
     cv2.line(new_img, tuple(keypoints[48]), tuple(keypoints[59]), color=c, thickness=th)
     cv2.line(new_img, tuple(keypoints[48]), tuple(keypoints[60]), color=c, thickness=th)
     cv2.line(new_img, tuple(keypoints[54]), tuple(keypoints[64]), color=c, thickness=th)
     cv2.line(new_img, tuple(keypoints[67]), tuple(keypoints[60]), color=c, thickness=th)
     for i in range(60, 67):
         cv2.line(new_img, tuple(keypoints[i]), tuple(keypoints[i+1]), color=c, thickness=th)
+
+def draw_mouth_mask(keypoints, shape):
+    return draw_mask(keypoints[IN_LIP_IDX], shape)
 
 
 def draw_mask(maskKp, shape, c=(255, 255, 255)):
@@ -273,10 +278,18 @@ def draw_mask(maskKp, shape, c=(255, 255, 255)):
   mask = mask.astype(np.float32) / 255.0
   return mask
 
-def draw_section(sections, shape, section_config=[LEFT_EYE_IDX, LEFT_EYEBROW_IDX, RIGHT_EYE_IDX, RIGHT_EYEBROW_IDX, OUT_LIP_IDX, IN_LIP_IDX, (CHIN_IDX, False)], groups=[0, 0, 1, 1, 2, 2, 2], split=False):
+def draw_section(sections, shape, section_config=[LEFT_EYE_IDX, LEFT_EYEBROW_IDX, RIGHT_EYE_IDX, RIGHT_EYEBROW_IDX, OUT_LIP_IDX, IN_LIP_IDX, (CHIN_IDX, False)], groups=[0, 0, 1, 1, 2, 2, 2], split=False, mask=None):
+
     # sections: np
+    if mask is None:
+        mask = np.zeros(shape, dtype=np.uint8)
+        
+    if len(sections) == 478:
+        return get_mesh_image(torch.tensor(sections), shape)
+    
+    # united section
+    # groups = [0] * len(groups)
     num_groups = len(set(groups))
-    mask = np.zeros(shape, dtype=np.uint8)
     if split == True:
         masks = [mask.copy() for _ in range(num_groups)]
         
@@ -287,8 +300,16 @@ def draw_section(sections, shape, section_config=[LEFT_EYE_IDX, LEFT_EYEBROW_IDX
         if len(sec_idx) == 2 and not sec_idx[1]:
             is_closed = False
             sec_idx = sec_idx[0]
+            
         section = sections[:len(sec_idx)]
         sections = sections[len(sec_idx):]
+        
+        if sec_idx == LEFT_EYE_IDX:
+            reorder = list(map(lambda x: LEFT_EYE_IDX.index(x), _LEFT_EYE_IDX))
+            section = section[reorder]
+        if sec_idx == RIGHT_EYE_IDX:
+            reorder = list(map(lambda x: RIGHT_EYE_IDX.index(x), _RIGHT_EYE_IDX))
+            section = section[reorder]
         # print(f'len sections: {len(sections)}')
         # section = np.array([
         #     [128, 128],
@@ -630,4 +651,13 @@ def pca_mesh(mesh_stack_path, save_name, pca_path=None):
         res = torch.pca_lowrank(expression_stack.flatten(1), q=80)
 
     torch.save({'mean': mesh_mean.view(-1, 3), 'pca': res}, save_name)
+
+
+def matrix2euler(r, seq='xyz', degrees=False):
+    # R(numpy): 3 x 3
+    return R.from_matrix(r).as_euler(seq=seq, degrees=degrees)
+
+def euler2matrix(angles, seq='xyz', degrees=False):
+    # angles = 3-d array
+    return R.from_euler(seq, angles, degrees).as_matrix()
 

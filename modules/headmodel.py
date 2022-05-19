@@ -14,8 +14,7 @@ from tqdm import tqdm
 import torch
 
 import torch.nn as nn
-
-
+import scipy.stats as stats
 
 class NonStPCA():
     def __init__(self, dim_data, num_pc, update_freq=1, t=0.9):
@@ -77,7 +76,7 @@ class HeadModel(nn.Module):
     def __init__(self, train_params):
         super(HeadModel, self).__init__()
         self.train_params = train_params
-        self.sections = train_params['sections']
+        self.sections = train_params['headmodel_sections']
         self.split_ids = [sec[1] for sec in self.sections]
         self.pca_xs = []
         self.pca_es = []
@@ -103,6 +102,8 @@ class HeadModel(nn.Module):
                 nn.Sequential(
                     nn.Linear(3 * len(sec[0]), 256),
                     nn.ReLU(),
+                    # nn.Linear(256, 256),
+                    # nn.ReLU(),
                     nn.Linear(256, 3 * len(sec[0])),
                     nn.Sigmoid()
                 )
@@ -254,9 +255,11 @@ class HeadModel(nn.Module):
     def get_scale(self, sec, scaler):
         return 2 * scaler(sec)
     
-    def extract_emotion_section(self, x, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err, num_pc):
+    def extract_emotion_section(self, x, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err):
         # x: B x N * 3   
         
+        num_pc = len(s_x)
+
         if mu_x is None:
             # k_e = x.abs().clamp(min=1e-3)
             k_e = self.get_scale(x, scaler) # B x n * 3
@@ -332,7 +335,7 @@ class HeadModel(nn.Module):
             s_e = self.getattr(f's_e_{i}')
             sigma_err = self.getattr(f'sigma_err_{i}')
             
-            kp_reg = self.extract_emotion_section(sec.flatten(1), self.scalers[i], mu_x, u_x, s_x, u_e, s_e, sigma_err, self.sections[i][1])
+            kp_reg = self.extract_emotion_section(sec.flatten(1), self.scalers[i], mu_x, u_x, s_x, u_e, s_e, sigma_err)
             kp_reg_xs.append(kp_reg['x'])
             kp_reg_es.append(kp_reg['e'])
             k_es.append(kp_reg['k_e'])
@@ -385,7 +388,7 @@ class HeadModel(nn.Module):
         
         return loss_values, generated
         
-    def estimate_params_section_v2(self, x, e_normalized, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err, num_kp):
+    def estimate_params_section_v2(self, x, e_normalized, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err, num_kp, threshold=None):
         # x: B x N * 3   
         
         assert x is not None
@@ -410,10 +413,11 @@ class HeadModel(nn.Module):
         # v2
         e_driven = e_normalized * k_e[None]
         n = len(e_driven)
-        sigma_x_driven = (n * sigma_x.inverse() / self.s_err_square + sigma_x_total.inverse()).inverse()
+        # sigma_x_driven = (n * sigma_x.inverse() / self.s_err_square + sigma_x_total.inverse()).inverse()
+        sigma_x_driven = (sigma_x.inverse() / self.s_err_square + sigma_x_total.inverse()).inverse()
         M = sigma_x @ A_x.t() @ sigma_inverse
         N = mu_x_total.t() @ sigma_x_total.inverse()
-        zx_driven = (torch.eye(num_kp).cuda() - n * sigma_x_driven.t() @ sigma_x.inverse().t() @ M @ A_x / self.s_err_square).inverse() @ sigma_x_driven.t() @ (sigma_x.inverse().t() @ M @ e_driven.sum(dim=0).unsqueeze(1) / self.s_err_square + N.t()) 
+        zx_driven = (torch.eye(num_kp).cuda() - sigma_x_driven.t() @ sigma_x.inverse().t() @ M @ A_x / self.s_err_square).inverse() @ sigma_x_driven.t() @ (sigma_x.inverse().t() @ M @ e_driven.mean(dim=0).unsqueeze(1) / self.s_err_square + N.t()) 
         x_driven = A_x @ zx_driven
         # print(f'M shape: {M.shape}')
         # print(f'N shape: {N.shape}')
@@ -437,12 +441,26 @@ class HeadModel(nn.Module):
         # print(f'simga e square inverse: {sigma_e_square_inverse}')
         # print(f'simga e square inverse: {sigma_e_square_inverse}')
         # print(f'simga e square inverse: {sigma_e_square_inverse}')
+        
+
         kp_reg_e = x - x_driven.squeeze(1)[None]   # B x N * 3
+        
+        # thresholding
+        if threshold is not None:
+            reg_ze = (self.s_err_square * torch.eye(A_e.size(1)).cuda() + A_e.t() @ A_e).inverse() @ A_e.t() @ kp_reg_e.squeeze(0).unsqueeze(1) # num_kp x 1
+            chi2_value = (reg_ze ** 2).sum()
+            chi2_threshold = stats.chi2(df=len(reg_ze)).ppf(threshold)
+            print(f'Source Mesh Score: {stats.chi2(df=len(reg_ze)).cdf(chi2_value.item())}')
+            if chi2_value <= chi2_threshold:
+                print('Source Mesh is treated as Neutralized Mesh')
+                x_driven = x.squeeze(0).unsqueeze(1)
+                kp_reg_e = x - x_driven.squeeze(1)[None]   # B x N * 3
+                
         kp_reg_x = x_driven.squeeze(1) + mu_x   # N * 3
 
         return {'x': kp_reg_x, 'e': kp_reg_e, 'k_e': k_e}
       
-    def estimate_params_v2(self, x, e_normalized):
+    def estimate_params_v2(self, x, e_normalized, threshold=None):
         # data: {v: B x ...}
         bs = len(x['mesh']['value'])
     
@@ -462,7 +480,7 @@ class HeadModel(nn.Module):
             s_e = self.getattr(f's_e_{i}')
             sigma_err = self.getattr(f'sigma_err_{i}')
             
-            kp_reg = self.estimate_params_section_v2(sec.flatten(1), e_normalized[i], self.scalers[i], mu_x, u_x, s_x, u_e, s_e, sigma_err, self.sections[i][1])
+            kp_reg = self.estimate_params_section_v2(sec.flatten(1), e_normalized[i], self.scalers[i], mu_x, u_x, s_x, u_e, s_e, sigma_err, self.sections[i][1], threshold=threshold)
             
             kp_reg_xs.append(kp_reg['x'])   # num_kp * 3
             kp_reg_es.append(kp_reg['e'])   # B x num_kp * 3
@@ -486,9 +504,10 @@ class HeadModel(nn.Module):
         sigma_inverse = torch.eye(A_e.size(0)).cuda() - A_e @ sigma_e @ A_e.t()
         sigma_x = (A_x.t() @ sigma_inverse @ A_x).inverse()
         mu_xs = sigma_x @ A_x.t() @ sigma_inverse @ x.unsqueeze(2) # B x num_pc x 1
-        sigma_x_total = (len(x) * sigma_x.inverse() + torch.eye(sigma_x.size(0)).cuda() * self.s_err_square).inverse()
-        mu_x_total = sigma_x_total @ sigma_x.inverse() @ mu_xs.sum(dim=0) # 3 * num_kp x 1
-        sigma_x_total = sigma_x_total * self.s_err_square
+        sigma_x_total = (sigma_x.inverse() / self.s_err_square + torch.eye(sigma_x.size(0)).cuda()).inverse()
+        # sigma_x_total = (len(x) * sigma_x.inverse() / self.s_err_square + torch.eye(sigma_x.size(0)).cuda()).inverse()
+        mu_x_total = sigma_x_total @ sigma_x.inverse() @ mu_xs.sum(dim=0) / (self.s_err_square * len(x)) # 3 * num_kp x 1
+        
         # sigma_inverse = torch.eye(A_e.size(0))
         # sigma_x = ()
         # sigma_e_square_inverse = u_e @ (u_e.t() @ u_e).inverse() @ s_e.inverse().t() @ s_e.inverse() @ (u_e.t() @ u_e).inverse() @ u_e.t()
@@ -533,7 +552,7 @@ class HeadModel(nn.Module):
             s_e = self.getattr(f's_e_{i}')
             sigma_err = self.getattr(f'sigma_err_{i}')
             
-            kp_reg = self.estimate_params_section(sec.flatten(1), self.scalers[i], mu_x, u_x, s_x, u_e, s_e, sigma_err, self.sections[1][1])
+            kp_reg = self.estimate_params_section(sec.flatten(1), self.scalers[i], mu_x, u_x, s_x, u_e, s_e, sigma_err, self.sections[0][1])
             
             kp_reg_xs.append(kp_reg['x'])   # num_kp * 3
             kp_reg_es.append(kp_reg['e'])   # B x num_kp * 3
@@ -553,12 +572,15 @@ class HeadModel(nn.Module):
             assert k_e_drv is not None
             sec = sec[0]    # N x 3
             u_e = self.getattr(f'u_e_{i}')
+            s_e = self.getattr(f's_e_{i}')
             u_e_drv = k_e_drv[i].unsqueeze(1) * u_e
+            A_e_drv = u_e_drv @ s_e
             e_drv = sec.flatten(0) - x_drv[i]
-            z_e = (u_e_drv.t() @ u_e_drv).inverse() @ u_e_drv.t() @ e_drv.unsqueeze(1) # N * 3 x 1
+            z_e = (self.s_err_square * torch.eye(A_e_drv.size(1)).cuda() + A_e_drv.t() @ A_e_drv).inverse() @ A_e_drv.t() @ e_drv
+            # z_e = (u_e_drv.t() @ u_e_drv).inverse() @ u_e_drv.t() @ e_drv.unsqueeze(1) # N * 3 x 1
             u_e_src = k_e_src[i].unsqueeze(1) * u_e
             # e_src = e_drv * k_e_src[i] / k_e_drv[i] 
-            e_src = u_e_src @ z_e
+            e_src = u_e_src @ s_e @ z_e
             X_driven = x_src[i].view(-1, 3) + e_src.view(-1, 3)
             # print(f'e src shape: {e_src.shape}')
             # print(f'mean src shape: {mean_src[i].shape}')
