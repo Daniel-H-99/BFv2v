@@ -8,6 +8,7 @@ from torch.autograd import grad
 import modules.hopenet as hopenet
 from torchvision import transforms
 import math
+from utils.util import get_mesh_image, draw_section, draw_mouth_mask
 
 class Vgg19(torch.nn.Module):
     """
@@ -126,15 +127,6 @@ def detach_kp(kp):
     return {key: value.detach() for key, value in kp.items()}
 
 
-def headpose_pred_to_degree(pred):
-    device = pred.device
-    idx_tensor = [idx for idx in range(66)]
-    idx_tensor = torch.FloatTensor(idx_tensor).to(device)
-    pred = F.softmax(pred)
-    degree = torch.sum(pred*idx_tensor, axis=1) * 3 - 99
-
-    return degree
-
 '''
 # beta version
 def get_rotation_matrix(yaw, pitch, roll):
@@ -166,38 +158,11 @@ def get_rotation_matrix(yaw, pitch, roll):
     return rot_mat
 '''
 
-def get_rotation_matrix(yaw, pitch, roll):
-    yaw = yaw / 180 * 3.14
-    pitch = pitch / 180 * 3.14
-    roll = roll / 180 * 3.14
-
-    roll = roll.unsqueeze(1)
-    pitch = pitch.unsqueeze(1)
-    yaw = yaw.unsqueeze(1)
-
-    pitch_mat = torch.cat([torch.ones_like(pitch), torch.zeros_like(pitch), torch.zeros_like(pitch), 
-                          torch.zeros_like(pitch), torch.cos(pitch), -torch.sin(pitch),
-                          torch.zeros_like(pitch), torch.sin(pitch), torch.cos(pitch)], dim=1)
-    pitch_mat = pitch_mat.view(pitch_mat.shape[0], 3, 3)
-
-    yaw_mat = torch.cat([torch.cos(yaw), torch.zeros_like(yaw), torch.sin(yaw), 
-                           torch.zeros_like(yaw), torch.ones_like(yaw), torch.zeros_like(yaw),
-                           -torch.sin(yaw), torch.zeros_like(yaw), torch.cos(yaw)], dim=1)
-    yaw_mat = yaw_mat.view(yaw_mat.shape[0], 3, 3)
-
-    roll_mat = torch.cat([torch.cos(roll), -torch.sin(roll), torch.zeros_like(roll),  
-                         torch.sin(roll), torch.cos(roll), torch.zeros_like(roll),
-                         torch.zeros_like(roll), torch.zeros_like(roll), torch.ones_like(roll)], dim=1)
-    roll_mat = roll_mat.view(roll_mat.shape[0], 3, 3)
-
-    rot_mat = torch.einsum('bij,bjk,bkm->bim', pitch_mat, yaw_mat, roll_mat)
-
-    return rot_mat
 
 def keypoint_transformation(kp_canonical, he, estimate_jacobian=False):
     kp = kp_canonical['value']    # (bs, k, 3)
     yaw, pitch, roll = he['yaw'], he['pitch'], he['roll']
-    t, exp = he['t'], he['exp']
+    t = he['t']
     
     yaw = headpose_pred_to_degree(yaw)
     pitch = headpose_pred_to_degree(pitch)
@@ -219,14 +184,11 @@ def keypoint_transformation(kp_canonical, he, estimate_jacobian=False):
     kp_neutralized = kp_t
 
     # add expression deviation 
-    exp = exp.view(exp.shape[0], -1, 3)
-    kp_transformed = kp_t + exp
+    # exp = exp.view(exp.shape[0], -1, 3)
+    kp_transformed = kp_t
 
-    if estimate_jacobian:
-        jacobian = kp_canonical['jacobian']   # (bs, k ,3, 3)
-        jacobian_transformed = torch.einsum('bmp,bkps->bkms', rot_mat, jacobian)
-    else:
-        jacobian_transformed = None
+
+    jacobian_transformed = None
 
     return {'value': kp_transformed, 'jacobian': jacobian_transformed, 'neutralized': {'value': kp_neutralized, 'jacobian': jacobian_transformed}}
 
@@ -296,7 +258,7 @@ class GeneratorFullModel(torch.nn.Module):
     Merge all generator related updates into single model for better multi-gpu usage
     """
 
-    def __init__(self, kp_extractor, he_estimator, generator, discriminator, train_params, headmodel=None, estimate_jacobian=True):
+    def __init__(self, kp_extractor, he_estimator, generator, discriminator, train_params, headmodel=None, estimate_jacobian=True, reference_info=None):
         super(GeneratorFullModel, self).__init__()
         self.kp_extractor = kp_extractor
         self.he_estimator = he_estimator
@@ -348,6 +310,11 @@ class GeneratorFullModel(torch.nn.Module):
         
             self.register_buffer(f'sigma_err_{i}', (torch.eye(3 * len(sec[0])) * self.train_params['sigma_err']).cuda())
 
+        ### reference_info ###
+        self.reference_info = reference_info # {he_R, he_t, img}
+        self.frame_shape = self.reference_info['img'].shape
+        
+        
     def getattr(self, name):
         return getattr(self, name)
     
@@ -459,29 +426,82 @@ class GeneratorFullModel(torch.nn.Module):
         # sections[]: (num_sections) x B x -1 x 3
         return torch.cat(sections, dim=1)
     
+
+    def get_mouth_image(self, mesh):
+        mouth = draw_mouth_mask(mesh[:, :2].astype(np.int32), self.frame_shape)
+        mouth = mouth[:, :, :1].astype(np.float32).transpose((2, 0, 1))
+        
+        return mouth
     
-    def register_keypoint(self, kp_source, kp_driving):
-        X_source = kp_source['value']
-        X_driving = kp_driving['value']
-
-        X_source_splitted = self.split_section(X_source)
-        X_driving_splitted = self.split_section(X_driving)
-        
+    def get_mesh_image_section(self, mesh):
+        # mesh: N0 x 3
+        splitted_sections = []
         for i, sec in enumerate(self.sections):
-            x = (X_source_splitted[i] + X_driving_splitted[i]) / 2
-            x = X_source_splitted[i]
-            e = X_source_splitted[i] - x
-            
-            x = x.flatten(1).detach().cpu()
-            e = math.sqrt(2) * e.flatten(1).detach().cpu()
+            splitted_sections.append(mesh[sec[0]])
+    
+        sections = torch.cat(splitted_sections, dim=0)
+        # print(f'sections shape: {sections.shape}')
+        secs = draw_section(sections[:, :2].detach().cpu().numpy().astype(np.int32), self.frame_shape, split=True) # (num_sections) x H x W x 3
+        # print(f'draw section done')
+        secs = [sec[:, :, :1].astype(np.float32).transpose((2, 0, 1)) / 255.0 for sec in secs]
+        # print('got mesh image sections')
+        return secs
+    
+    # def register_keypoint(self, kp_source, kp_driving):
+    #     X_source = kp_source['value']
+    #     X_driving = kp_driving['value']
 
-            for x_i in x:
-                self.pca_xs[i].register(x_i)
-            for e_i in e:
-                self.pca_es[i].register(e_i)
-                
-        self.update_pc()
+    #     X_source_splitted = self.split_section(X_source)
+    #     X_driving_splitted = self.split_section(X_driving)
         
+    #     for i, sec in enumerate(self.sections):
+    #         x = (X_source_splitted[i] + X_driving_splitted[i]) / 2
+    #         x = X_source_splitted[i]
+    #         e = X_source_splitted[i] - x
+            
+    #         x = x.flatten(1).detach().cpu()
+    #         e = math.sqrt(2) * e.flatten(1).detach().cpu()
+
+    #         for x_i in x:
+    #             self.pca_xs[i].register(x_i)
+    #         for e_i in e:
+    #             self.pca_es[i].register(e_i)
+                
+    #     self.update_pc()
+        
+    def denormalize(self, mesh, img):
+            # target pose
+            with torch.no_grad():
+                he = self.he_estimator(img) # {R, t, ...}
+            R, t = he['R'], he['t']
+            value = mesh['value'] # B x N x 3
+            aux = self.reference_info
+            print(f't shape: {t.shape}')
+            bias = mesh['t'].squeeze(2) + (mesh['c'].unsqueeze(1).unsqueeze(2) * mesh['R']).matmul(t.unsqueeze(2)).squeeze(2) # B x 3
+            mesh['he_bias'] = bias
+            centered_value = value - bias.unsqueeze(1)  # B x N x 3
+            R_tilda = R.matmul(aux['he_R'].inverse()) # B x 3 x 3
+            R_tilda = mesh['R'].inverse()
+            mesh['he_R'], mesh['he_t'] = R_tilda, t
+            frontalized_value = (1 / mesh['c'].unsqueeze(1).unsqueeze(2)) * torch.einsum('bmp,bkp->bkm', R_tilda, centered_value)
+            trans_value = frontalized_value + t.unsqueeze(1)
+            mesh['he_raw_value'] = trans_value
+            # # print(f'he raw value shape: {trans_value.shape}')
+            
+            L = self.frame_shape[0]
+            A = torch.tensor(np.array([-1, -1, 1 / 2], dtype='float32')[np.newaxis, :]).cuda() # 1 x 3
+            he_mesh_imgs = []
+            he_mesh_img_secs = []
+            for i in range(len(mesh['he_raw_value'])):
+                raw_value = (L * (mesh['he_raw_value'][i] - A)) // 2
+                # print(f'raw value shape: {raw_value.shape}')
+                he_mesh_imgs.append(torch.tensor((get_mesh_image(raw_value, self.frame_shape)[:, :, [0]] / 255.0).transpose((2, 0, 1))))
+                he_mesh_img_secs.append(torch.tensor(self.get_mesh_image_section(raw_value)))
+                    
+            mesh['he_mesh_img'] = torch.stack(he_mesh_imgs, dim=0).cuda()
+            mesh['he_mesh_img_sec'] = torch.stack(he_mesh_img_secs, dim=0).cuda().transpose(0, 1)
+            print(f'image sec shape: {mesh["he_mesh_img_sec"].shape}')
+            print('loaded')
     def calc_reg_loss(self, xs, es):
         # xs, es: (num_section) x N_i * 3
         loss_reg = 0
@@ -544,10 +564,13 @@ class GeneratorFullModel(torch.nn.Module):
         # kp_canonical_source = self.kp_extractor(x['source'])     # {'value': value, 'jacobian': jacobian}   
         # kp_canonical_driving = self.kp_extractor(x['driving'])     # {'value': value, 'jacobian': jacobian}   
 
-        # he_source = self.he_estimator(x['source'])        # {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 's_e': s_e}
-        # he_driving = self.he_estimator(x['driving'])      # {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 's_e': s_e}
+        kp_source = x['source_mesh']
+        kp_driving = x['driving_mesh']
+        
+        self.denormalize(kp_source, x['source'])        # {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 's_e': s_e}
+        self.denormalize(kp_driving, x['driving'])      # {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 's_e': s_e}
 
-
+        
         # driving_224 = x['hopenet_driving']
         # yaw_gt, pitch_gt, roll_gt = self.hopenet(driving_224)
 
@@ -579,17 +602,17 @@ class GeneratorFullModel(torch.nn.Module):
         # {'value': value, 'jacobian': jacobian}
         # kp_source = keypoint_transformation(kp_canonical, he_source, self.estimate_jacobian)
         # kp_driving = keypoint_transformation(kp_canonical, he_driving, self.estimate_jacobian)
-        kp_source = x['source_mesh']
-        kp_driving = x['driving_mesh']
+
         
-        
+        print('entering generator')
         generated = self.generator(x['source'], kp_source=kp_source, kp_driving=kp_driving)
-        src_section = self.concat_section(self.split_section(kp_source['raw_value']))
-        tgt_section = self.concat_section(self.split_section(kp_driving['raw_value']))
+        print('out generator')
+        src_section = self.concat_section(self.split_section(kp_source['he_raw_value']))
+        tgt_section = self.concat_section(self.split_section(kp_driving['he_raw_value']))
         # print(f'src section: {src_section}')
         # print(f'drv section: {tgt_section}')
-        # generated['kp_source'] = {'value': src_section}
-        # generated['kp_driving'] = {'value': tgt_section}
+        generated['kp_source'] = {'value': src_section}
+        generated['kp_driving'] = {'value': tgt_section}
         # seg_loss = self.calc_seg_loss(generated['mask'], generated['heatmap'])
         
         # loss_values['segmentation'] = self.loss_weights['segmentation'] * seg_loss
@@ -601,14 +624,14 @@ class GeneratorFullModel(torch.nn.Module):
         if self.loss_weights['motion_match'] != 0:
             motion = generated['deformation'] # B x d x h x w x 3
             motion = motion.permute(0, 4, 1, 2, 3) # B x 3 x d x h x w
-            it_section = kp_driving['raw_value'] # B x N x 3
-            motion_GT = kp_source['raw_value'] # B x N x 3
+            it_section = kp_driving['he_raw_value'] # B x N x 3
+            motion_GT = kp_source['he_raw_value'] # B x N x 3
             motion_section = F.grid_sample(motion, it_section[:, :, None, None])
             motion_section = motion_section.squeeze(4).squeeze(3).transpose(1,2) # B x N x 3
             # print(f'motion Gt size {motion_GT.shape}')
             # print(f'motion size {motion_section.shape}')
             loss_values['motion_match'] = self.loss_weights['motion_match'] * F.l1_loss(motion_section, motion_GT)
-        
+
         if self.loss_weights['coefs_match'] != 0:
             motion = generated['move'] # B x D x H x W x 3
             motion = motion[:, :, :, :2]  # B x H x W x 2
@@ -656,7 +679,7 @@ class GeneratorFullModel(torch.nn.Module):
 
         if self.loss_weights['generator_gan'] != 0:
             pyramide_real = self.pyramid_cond(torch.cat([kp_driving['mesh_img'].cuda(), x['driving']], dim=1))
-            pyramide_generated = self.pyramid_cond(torch.cat([kp_source['mesh_img'].cuda(), generated['prediction']], dim=1))
+            pyramide_generated = self.pyramid_cond(torch.cat([kp_driving['he_mesh_img'].cuda(), generated['prediction']], dim=1))
             discriminator_maps_generated = self.discriminator(pyramide_generated)
             discriminator_maps_real = self.discriminator(pyramide_real)
             
@@ -739,15 +762,15 @@ class GeneratorFullModel(torch.nn.Module):
             loss_values['keypoint'] = self.loss_weights['keypoint'] * value_total
 
         if self.loss_weights['headpose'] != 0:
-            # transform_hopenet =  transforms.Compose([
-            #                                         transforms.Resize(size=(224, 224)),
-            #                                         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            #                                         transforms.ToTensor()])
+            transform_hopenet =  transforms.Compose([
+                                                    transforms.Resize(size=(224, 224)),
+                                                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                                                    transforms.ToTensor()])
             
             # print(f'driving image shape: {x["driving"][0].cpu().size()}')
             # print(f'driving image shape: {transforms.ToPILImage()(x["driving"][0].permute(1, 2, 0).cpu()).size}')
             # print(f'driving image: {transforms.ToPILImage()(x["driving"][0].permute(1, 2, 0).cpu())}')
-            # driving_224 = transform_hopenet(x['driving'].cpu()).cuda()
+            driving_224 = transform_hopenet(x['driving'].cpu()).cuda()
             driving_224 = x['hopenet_driving']
 
             yaw_gt, pitch_gt, roll_gt = self.hopenet(driving_224)

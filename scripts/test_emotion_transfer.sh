@@ -19,8 +19,8 @@ conda deactivate
 
 label="v4.2"
 checkpoint="log_headmodel/${label}"
-source_dir=asset/celeb
-driving_dir=asset/young_v2
+source_dir=/home/server25/minyeong_workspace/Experiment/data/demo/src
+driving_dir=/home/server25/minyeong_workspace/Experiment/data/demo/speech
 threshold=0.00
 
 for source_image in $source_dir/*
@@ -28,7 +28,7 @@ do
     for driving_video in $driving_dir/*
     do
         # source_image="asset/celeb/E_00002_cropped.png"
-        driving_video="asset/young_v2/00007_cropped.mp4"
+        # driving_video="asset/young_v2/00007_cropped.mp4"
 
         echo "working on $source_image / $driving_video"
         vid=$(basename $source_image .png)_$(basename $driving_video .mp4).mp4
@@ -46,4 +46,5 @@ do
             [v1][v2][v3][v4][v5][v6]hstack=inputs=6[v]" -map "[v]" result/${label}/$vid
         break
     done
+    break
 done  

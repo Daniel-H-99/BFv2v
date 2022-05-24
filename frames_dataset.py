@@ -113,7 +113,7 @@ class SingleVideoDataset(Dataset):
         while True:
             try:
                 frame = self.frames[idx]
-                
+                frame = cv2.resize(frame, self.frame_shape[:2])
                 L = self.frame_shape[0]
                 mesh = extract_mesh(img_as_ubyte(frame), self.reference_dict) # {value (N x 3), R (3 x 3), t(3 x 1), c1}
                 A = np.array([-1, -1, 1 / 2], dtype='float32')[:, np.newaxis] # 3 x 1
@@ -178,7 +178,7 @@ class FramesDataset2(Dataset):
             self.transform = None
 
     def __len__(self):
-        return len(self.ids)
+        return len(self.ids) // 3
 
     def split_section(self, X):
         res = []
@@ -256,13 +256,13 @@ class FramesDataset2(Dataset):
                     # print('checkpoint 2')
                     meshes.append(mesh)
                     
-                ### Make intermediate target mesh ###
-                src_mesh = meshes[0]
-                drv_mesh = meshes[1]
-                target_mesh = (1 / src_mesh['c'][np.newaxis, np.newaxis]) * np.einsum('ij,nj->ni', np.linalg.inv(src_mesh['R']), drv_mesh['value'] - src_mesh['t'][np.newaxis, :, 0])
-                drv_mesh['intermediate_value'] = target_mesh
-                target_mesh = L * (target_mesh - np.squeeze(A, axis=-1)[None]) // 2
-                drv_mesh['intermediate_mesh_img_sec'] = self.get_mesh_image_section(target_mesh)
+                # ### Make intermediate target mesh ###
+                # src_mesh = meshes[0]
+                # drv_mesh = meshes[1]
+                # target_mesh = (1 / src_mesh['c'][np.newaxis, np.newaxis]) * np.einsum('ij,nj->ni', np.linalg.inv(src_mesh['R']), drv_mesh['value'] - src_mesh['t'][np.newaxis, :, 0])
+                # drv_mesh['intermediate_value'] = target_mesh
+                # target_mesh = L * (target_mesh - np.squeeze(A, axis=-1)[None]) // 2
+                # drv_mesh['intermediate_mesh_img_sec'] = self.get_mesh_image_section(target_mesh)
                 
                 break
             
@@ -339,7 +339,7 @@ class FramesDataset(Dataset):
             self.transform = None
             
     def __len__(self):
-        return len(self.videos) // 3
+        return len(self.videos) // 100
 
     def split_section(self, X):
         res = []

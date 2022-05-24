@@ -3,7 +3,7 @@ from tqdm import tqdm
 import torch
 
 from torch.utils.data import DataLoader
-
+from skimage import io
 from logger import Logger
 from modules.model import GeneratorFullModel, DiscriminatorFullModel
 
@@ -11,7 +11,7 @@ from torch.optim.lr_scheduler import MultiStepLR
 
 from sync_batchnorm import DataParallelWithCallback
 
-from frames_dataset import DatasetRepeater
+from frames_dataset import DatasetRepeater, SingleImageDataset
 
 
 def train(config, generator, discriminator, kp_detector, he_estimator, checkpoint, log_dir, dataset, device_ids):
@@ -43,7 +43,15 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
         dataset = DatasetRepeater(dataset, train_params['num_repeats'])
     dataloader = DataLoader(dataset, batch_size=train_params['batch_size'], shuffle=True, num_workers=0, drop_last=True)
 
-    generator_full = GeneratorFullModel(kp_detector, he_estimator, generator, discriminator, train_params, estimate_jacobian=config['model_params']['common_params']['estimate_jacobian'])
+    # load reference info
+    ref_path = '/home/server25/minyeong_workspace/BFv2v/frame_reference.png'
+    reference_dataset = SingleImageDataset(ref_path)
+    ref_img_data = iter(DataLoader(reference_dataset, batch_size=1, shuffle=False, num_workers=0, drop_last=False)).next()
+    with torch.no_grad():
+        he_ref = he_estimator(ref_img_data['frame'].cuda())
+    reference_info = {'R': ref_img_data['mesh']['R'][0].cuda(), 't': ref_img_data['mesh']['t'][0].cuda(), 'c': ref_img_data['mesh']['c'][0].cuda(), 'he_R': he_ref['R'][0].cuda(), 'he_t': he_ref['t'][0].cuda(), 'img': ref_img_data['frame'][0].permute(1, 2, 0).cuda()}
+    
+    generator_full = GeneratorFullModel(kp_detector, he_estimator, generator, discriminator, train_params, estimate_jacobian=config['model_params']['common_params']['estimate_jacobian'], reference_info=reference_info)
     discriminator_full = DiscriminatorFullModel(kp_detector, generator, discriminator, train_params)
 
     if torch.cuda.is_available():

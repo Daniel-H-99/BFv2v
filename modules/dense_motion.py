@@ -90,7 +90,7 @@ class DenseMotionNetwork(nn.Module):
         
         for i, sec in enumerate(secs):
             sec = sec.flatten(1) - getattr(self, f'headmodel_mu_x_{i}')[None]
-            prior = self.prior_extractors[i](sec).view(bs, -1, 3) # B x num_prior x 2
+            prior = self.prior_extractors[i](sec).view(bs, -1, 3) # B x num_prior x 3
             priors.append(prior)
             
         priors = torch.cat(priors, dim=1)
@@ -201,6 +201,38 @@ class DenseMotionNetwork(nn.Module):
     #     coords_drv = torch.einsum('bij,bnj->bni', kp_driving['R'].inverse() / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv) # B x N x 3
 
     #     return {'src': coords_src, 'drv': coords_drv}         
+
+    def keypoint_transformation(self, kp, he):
+        yaw, pitch, roll = he['yaw'], he['pitch'], he['roll']
+        t = he['t']
+        
+        yaw = headpose_pred_to_degree(yaw)
+        pitch = headpose_pred_to_degree(pitch)
+        roll = headpose_pred_to_degree(roll)
+
+        rot_mat = get_rotation_matrix(yaw, pitch, roll)    # (bs, 3, 3)
+        
+        # keypoint rotation
+        kp_rotated = torch.einsum('bmp,bkp->bkm', rot_mat, kp)
+        # print(f't shape: {t.shape}')
+        # print(f'kp shape: {kp.shape}')
+
+        # keypoint translation
+
+        t = t.unsqueeze_(1).repeat(1, kp.shape[1], 1)
+        kp_t = kp_rotated + t
+
+
+        kp_neutralized = kp_t
+
+        # add expression deviation 
+        # exp = exp.view(exp.shape[0], -1, 3)
+        kp_transformed = kp_t
+
+
+        jacobian_transformed = None
+
+        return {'value': kp_transformed, 'jacobian': jacobian_transformed, 'neutralized': {'value': kp_neutralized, 'jacobian': jacobian_transformed}}
         
     def extract_rotation_keypoints(self, kp_source, kp_driving):
         # mesh_src = kp_source['value'] # B x N x 3
@@ -213,13 +245,17 @@ class DenseMotionNetwork(nn.Module):
         
         src_normed = coords_src
         drv_normed = coords_drv
+
+        bias_src = kp_source['he_bias']
+        coords_src = coords_src - bias_src.unsqueeze(1)  # B x N x 3
+        coords_src = torch.einsum('bij,bnj->bni', kp_source['he_R'] / kp_source['c'].unsqueeze(1).unsqueeze(2), coords_src) # B x N x 3
+        coords_src = coords_src + kp_source['he_t'].unsqueeze(1)
         
-        coords_src = coords_src - kp_source['t'].unsqueeze(1).squeeze(3) # B x N x 3
-        coords_src = torch.einsum('bij,bnj->bni', kp_source['R'].inverse() / kp_source['c'].unsqueeze(1).unsqueeze(2), coords_src) # B x N x 3
-        
-        coords_drv = coords_drv - kp_driving['t'].unsqueeze(1).squeeze(3) # B x N x 3
-        coords_drv = torch.einsum('bij,bnj->bni', kp_driving['R'].inverse() / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv) # B x N x 3
-     
+        bias_drv = kp_driving['he_bias']
+        coords_drv = coords_drv - bias_drv.unsqueeze(1)  # B x N x 3
+        coords_drv = torch.einsum('bij,bnj->bni', kp_driving['he_R'] / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv) # B x N x 3
+        coords_drv = coords_drv + kp_driving['he_t'].unsqueeze(1)
+
 
         return {'src': coords_src, 'drv': coords_drv, 'src_normed': src_normed, 'drv_normed': drv_normed}         
         
@@ -236,6 +272,7 @@ class DenseMotionNetwork(nn.Module):
         rotation_kps = self.extract_rotation_keypoints(kp_source, kp_driving)
         kp_source['kp'] = rotation_kps['src']
         kp_driving['kp'] = rotation_kps['drv']
+        
         kp_source['prior'] = rotation_kps['src_normed']
         kp_driving['prior'] = rotation_kps['drv_normed']
         
@@ -255,9 +292,9 @@ class DenseMotionNetwork(nn.Module):
            
         input = input.view(bs, -1, d, h, w)
 
-        if 'mesh_img_sec' in kp_driving:
-            print(f'mesh_img_section exists')
-            mesh_img = kp_driving['mesh_img_sec'][2]
+        if 'he_mesh_img_sec' in kp_driving:
+            print(f'he mesh_img_section exists')
+            mesh_img = kp_driving['he_mesh_img_sec'][2]
             if input.shape[3] != mesh_img.shape[3] or input.shape[4] != mesh_img.shape[4]:
                 mesh_img = F.interpolate(mesh_img, size=input.shape[3:], mode='bilinear')
             mesh_img = mesh_img.unsqueeze(2).repeat(1, 1, d, 1, 1)

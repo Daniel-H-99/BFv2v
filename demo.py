@@ -29,9 +29,9 @@ import math
 if sys.version_info[0] < 3:
     raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 
-def load_checkpoints(config, checkpoint_path, checkpoint_headmodel_path, gen, cpu=False):
+def load_checkpoints(config, checkpoint_path, checkpoint_headmodel_path, checkpoint_posemodel_path, gen, cpu=False):
 
     headmodel = HeadModel(config['train_params'])
     
@@ -78,8 +78,19 @@ def load_checkpoints(config, checkpoint_path, checkpoint_headmodel_path, gen, cp
         generator = DataParallelWithCallback(generator)
 
     generator.eval()
+
+
+    posemodel = HEEstimator(**config['model_params']['he_estimator_params'],
+                               **config['model_params']['common_params'])
+
+    if torch.cuda.is_available():
+        posemodel.cuda()
+
+    ckpt_posemodel = torch.load(checkpoint_posemodel_path)
+    posemodel.load_state_dict(ckpt_posemodel['he_estimator'])
+    posemodel.eval()
     
-    return generator, headmodel
+    return generator, headmodel, posemodel
 
 
 
@@ -391,9 +402,9 @@ def filter_mesh(meshes, source_mesh):
     # R_ys_adapted = R_ys
     # R_zs_adapted = R_zs
     
-    # R_xs_adapted = torch.tensor(R_x_source)[None].repeat(len(R_xs))
-    # R_ys_adapted = torch.tensor(R_y_source)[None].repeat(len(R_ys))
-    # R_zs_adapted = torch.tensor(R_z_source)[None].repeat(len(R_zs))
+    R_xs_adapted = torch.tensor(R_x_source)[None].repeat(len(R_xs))
+    R_ys_adapted = torch.tensor(R_y_source)[None].repeat(len(R_ys))
+    R_zs_adapted = torch.tensor(R_z_source)[None].repeat(len(R_zs))
     
     R_xs_filtered = torch.tensor(filter_values(R_xs_adapted.numpy())).float()
     R_ys_filtered = torch.tensor(filter_values(R_ys_adapted.numpy())).float()
@@ -436,41 +447,27 @@ def filter_mesh(meshes, source_mesh):
     t_xs_adapted = adapt_values(t_xs_rot_raw, t_xs_rot_raw, scale=0.5, center_align=False, center=0)
     t_ys_adapted = adapt_values(t_ys_rot_raw, t_ys_rot_raw, scale=0.5, center_align=False, center=0)
     t_zs_adapted = adapt_values(t_zs_rot_raw, t_zs_rot_raw, scale=0.5, center_align=False, center=-0.05)
-    
-    
-    # t_xs_adapted = t_xs
-    # t_ys_adapted = t_ys
-    # t_zs_adapted = t_zs
-    
-    #### tmp ####
-    # t_zs_adapted[:] += 0.3
-    
-    # t_xs_adapted = t_x_source[None].repeat(len(t_xs))
-    # t_ys_adapted = t_y_source[None].repeat(len(t_ys))
-    # t_zs_adapted = t_z_source[None].repeat(len(t_zs))
-    
-    
-    t_xs_rot_filtered = torch.tensor(filter_values(t_xs_adapted.numpy())).float()
-    t_ys_rot_filtered = torch.tensor(filter_values(t_ys_adapted.numpy())).float()
-    t_zs_rot_filtered = torch.tensor(filter_values(t_zs_adapted.numpy())).float()
-    
-    t_stack_rot_filtered = torch.stack([t_xs_rot_filtered, t_ys_rot_filtered, t_zs_rot_filtered], dim=1)
-    t_stack_filtered = torch.einsum('bij,bj->bi', Rs, t_stack_rot_filtered * source_mesh['c'])
-    
-    t_xs_filtered = t_stack_filtered[:, 0]
-    t_ys_filtered = t_stack_filtered[:, 1]
-    t_zs_filtered = t_stack_filtered[:, 2]
-    
-    # t_xs_filtered = 1.5 * t_xs_filtered - bias[:, 0]
-    # t_ys_filtered = 1.5 * t_ys_filtered - bias[:, 1]
-    # t_zs_filtered = t_zs_filtered - bias[:, 2] + 0.05
-    
-    
-    # t_ys_filtered = t_ys_filtered + 0.07
 
-    # t_xs_filtered = t_xs
-    # t_ys_filtered = t_ys
-    # t_zs_filtered = t_zs
+    
+    # t_xs_rot_filtered = torch.tensor(filter_values(t_xs_adapted.numpy())).float()
+    # t_ys_rot_filtered = torch.tensor(filter_values(t_ys_adapted.numpy())).float()
+    # t_zs_rot_filtered = torch.tensor(filter_values(t_zs_adapted.numpy())).float()
+    
+    # t_stack_rot_filtered = torch.stack([t_xs_rot_filtered, t_ys_rot_filtered, t_zs_rot_filtered], dim=1)
+    # t_stack_filtered = torch.einsum('bij,bj->bi', Rs, t_stack_rot_filtered * source_mesh['c'])
+    
+    # t_xs_filtered = t_stack_filtered[:, 0]
+    # t_ys_filtered = t_stack_filtered[:, 1]
+    # t_zs_filtered = t_stack_filtered[:, 2]
+    
+
+    t_xs_adapted = t_x_source[None].repeat(len(t_xs))
+    t_ys_adapted = t_y_source[None].repeat(len(t_ys))
+    t_zs_adapted = t_z_source[None].repeat(len(t_zs))
+    
+    t_xs_filtered = t_xs_adapted
+    t_ys_filtered = t_ys_adapted
+    t_zs_filtered = t_zs_adapted
     
     for t_x, t_y, t_z, mesh in zip(t_xs_filtered, t_ys_filtered, t_zs_filtered, meshes):
         # t_x, t_y, t_z = mesh['t'].squeeze(1)
@@ -483,7 +480,7 @@ def filter_mesh(meshes, source_mesh):
     # t_stack = torch.stack([t_xs_filtered, t_ys_filtered, t_zs_filtered], dim=1)
     # rot = torch.einsum('bij,bj->bi', Rs.inverse(), t_stack / source_mesh['c'])
     
-    torch.save(t_stack_rot_filtered, os.path.join(opt.result_dir, f'{opt.result_video}_zs.pt'))
+    # torch.save(t_stack_rot_filtered, os.path.join(opt.result_dir, f'{opt.result_video}_zs.pt'))
 
         
 if __name__ == "__main__":
@@ -491,6 +488,8 @@ if __name__ == "__main__":
     parser.add_argument("--config", default='config/vox-256.yaml', help="path to config")
     parser.add_argument("--checkpoint", default='', help="path to checkpoint to restore")
     parser.add_argument("--checkpoint_headmodel", default='', help="path to headmodel checkpoint to restore")
+    parser.add_argument("--checkpoint_posemodel", default='/home/server25/minyeong_workspace/fv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
+    
     parser.add_argument("--reference_dict", default='mesh_dict_reference.pt', help="path to reference dict to restore")
 
     parser.add_argument("--source_image", default='', help="path to source image")
@@ -533,6 +532,13 @@ if __name__ == "__main__":
     config['train_params']['headmodel_sections'] = config['model_params']['common_params']['headmodel_sections']
     sections = config['train_params']['sections']
     
+    generator, headmodel, posemodel = load_checkpoints(config=config, checkpoint_path=opt.checkpoint, checkpoint_headmodel_path=opt.checkpoint_headmodel, checkpoint_posemodel_path=opt.checkpoint_posemodel, gen=opt.gen, cpu=opt.cpu)
+    generator.ignore_emotion = opt.ignore_emotion
+    
+    print(f'Generator Ignorance: {generator.ignore_emotion}')
+    estimate_jacobian = config['model_params']['common_params']['estimate_jacobian']
+    print(f'estimate jacobian: {estimate_jacobian}')
+
     reference_dict = torch.load(opt.reference_dict)
     source_image = imageio.imread(opt.source_image)
     fps = 25
@@ -552,7 +558,7 @@ if __name__ == "__main__":
         reader.close()
 
     frame_shape = config['dataset_params']['frame_shape']
-    
+
     if len(source_image.shape) == 2:
         source_image = cv2.cvtColor(source_image, cv2.COLOR_GRAY2RGB)
     source_image = resize(img_as_float32(source_image), frame_shape[:2])[..., :3]
@@ -596,54 +602,55 @@ if __name__ == "__main__":
 
     else:
         print("Using Pre-driven Data...")
+        source_mesh = torch.load(os.path.join(opt.driven_dir, 'result', 'source_mesh.pt'))
         driven_meshes = torch.load(os.path.join(opt.driven_dir, 'result', 'driven_meshes.pt'))
         for driven_mesh in driven_meshes:
             mesh = {}
 
-            mesh['_value'] = driven_mesh['value'][0].cpu()
-            mesh['value'] = torch.tensor(source_mesh['value']).cpu()
-            mesh['R'] = driven_mesh['R'][0].cpu()
-            mesh['c'] = driven_mesh['c'][0].cpu()
-            mesh['t'] = driven_mesh['t'][0].cpu()
+            mesh['_value'] = driven_mesh['value']
+            mesh['value'] = torch.tensor(source_mesh['value'])
+            mesh['R'] = driven_mesh['R']
+            mesh['c'] = driven_mesh['c']
+            mesh['t'] = driven_mesh['t']
+            mesh['he_R'] = driven_mesh['he_R']
+            mesh['he_t'] = driven_mesh['he_t']
+            mesh['he_value'] = driven_mesh['he_value']
+            mesh['he_raw_value'] = driven_mesh['he_raw_value']
+            mesh['he_bias'] = driven_mesh['he_bias']
             # mesh['R'] = source_mesh['R'].cpu()
             # mesh['c'] = source_mesh['c'].cpu()
             # mesh['t'] = source_mesh['t'].cpu()
             
             # driven_mesh['driven_sections'][:-len(section_mouth)] = torch.tensor(mesh['value'][section_indices][:-len(section_mouth)])
-            mesh['value'][section_indices] = driven_mesh['driven_sections'].cpu()
+            mesh['value'][section_indices] = driven_mesh['driven_sections']
             # print(f'delta mesh check: {(driven_mesh["driven_sections"].cpu() - source_mesh["value"][section_indices].cpu()).norm()}')
             target_mesh = (1 / source_mesh['c'][None, None]) * torch.einsum('ij,nj->ni', source_mesh['R'].inverse(), driven_mesh['driven_sections'].cpu() - source_mesh['t'][None, :, 0])
             target_mesh = L * (target_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
-            mesh['intermediate_mesh_img_sec'] = get_mesh_image_section(target_mesh, frame_shape)
+            # mesh['intermediate_mesh_img_sec'] = get_mesh_image_section(target_mesh, frame_shape)
             driving_meshes.append(mesh)
-            inter_meshes.append(target_mesh)
-            target_mesh = (1 / mesh['c'][None, None]) * torch.einsum('ij,nj->ni', mesh['R'].inverse(), driven_mesh['driven_sections'].cpu() - mesh['t'][None, :, 0])
-            target_mesh = L * (target_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
-            target_meshes.append(target_mesh)
+            # inter_meshes.append(target_mesh)
+            # target_mesh = (1 / mesh['c'][None, None]) * torch.einsum('ij,nj->ni', mesh['R'].inverse(), driven_mesh['driven_sections'].cpu() - mesh['t'][None, :, 0])
+            # target_mesh = L * (target_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
+            # target_meshes.append(target_mesh)
 
 
 
 
     # use one euro filter for denoising
-    filter_mesh(driving_meshes, source_mesh)
+    # filter_mesh(driving_meshes, source_mesh)
     target_meshes = []
     for mesh in driving_meshes:
-        raw_mesh = (1 / mesh['c'][None, None]) * torch.einsum('ij,nj->ni', mesh['R'].inverse(), mesh['value'].cpu() - mesh['t'][None, :, 0])
+        raw_mesh = mesh['he_raw_value']
+        # raw_mesh = (1 / mesh['c'][None, None]) * torch.einsum('ij,nj->ni', mesh['R'].inverse(), mesh['value'].cpu() - mesh['t'][None, :, 0])
         # print('msh img sec got')
         raw_mesh = L * (raw_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
 
         # mesh['mouth_img'] = get_mouth_image(raw_mesh.numpy(),  frame_shape)
-        mesh['mesh_img_sec'] = get_mesh_image_section(raw_mesh[section_indices], frame_shape)
+        mesh['he_mesh_img_sec'] = get_mesh_image_section(raw_mesh[section_indices], frame_shape)
         # print(f'mouth image shape: {mesh["mouth_img"].shape}')
         target_meshes.append(raw_mesh[section_indices])
         mesh['raw_value'] = np.array(raw_mesh, dtype='float32') * 2 / L + np.squeeze(A, axis=-1)[None]
         
-    generator, headmodel = load_checkpoints(config=config, checkpoint_path=opt.checkpoint, checkpoint_headmodel_path=opt.checkpoint_headmodel, gen=opt.gen, cpu=opt.cpu)
-    generator.ignore_emotion = opt.ignore_emotion
-
-    print(f'Generator Ignorance: {generator.ignore_emotion}')
-    estimate_jacobian = config['model_params']['common_params']['estimate_jacobian']
-    print(f'estimate jacobian: {estimate_jacobian}')
 
     if opt.find_best_frame or opt.best_frame is not None:
         i = opt.best_frame if opt.best_frame is not None else find_best_frame(source_image, driving_video, cpu=opt.cpu)
@@ -669,8 +676,8 @@ if __name__ == "__main__":
         mesh = target_meshes[i]
         # print(f'frame type: {img_as_ubyte(frame).dtype}')
         frame = np.ascontiguousarray(img_as_ubyte(frame))
-        meshed_frame = draw_section(mesh[:, :2].numpy().astype(np.int32), frame_shape, mask=frame)
-        # meshed_frame = frame
+        # meshed_frame = draw_section(mesh[:, :2].numpy().astype(np.int32), frame_shape, mask=frame)
+        meshed_frame = frame
         # meshed_frame = (255 * driving_meshes[i]['mouth_img'].repeat(3, 1, 1).permute(1, 2, 0)).numpy().astype(np.int32)
         meshed_frames.append(meshed_frame)
 
@@ -694,7 +701,7 @@ if __name__ == "__main__":
     for i, frame in enumerate(driving_video):
         if i >= len(target_meshes):
             continue
-        mesh = driving_meshes[i]['_value']
+        mesh = driving_meshes[i]['value']
         mesh = L * (mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
         # print(f'_mesh shape: {mesh.shape}')
         # mesh = target_meshes[i]

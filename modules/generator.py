@@ -226,25 +226,31 @@ class OcclusionAwareSPADEGenerator(nn.Module):
         # output_dict = moved
         # out = moved['moved_feature']
         # del output_dict['moved_feature']
-        
+        print('featuring')
         out = source_image
+        print(f'src img shape {out.shape}')
         out = self.first(out)
-        
+        print('pass 1')
         # if False:
 
         
         for i in range(len(self.down_blocks)):
             out = self.down_blocks[i](out)
+            print(f'pass {i}')
         out = self.second(out)
         bs, c, h, w = out.shape
         # print(out.shape)
+
         feature_3d = out.view(bs, self.reshape_channel, self.reshape_depth, h ,w) 
         feature_3d = self.resblocks_3d(feature_3d)
         
+        print('3d featuring')        
         # Transforming feature representation according to deformation and occlusion
         if self.dense_motion_network is not None:
+            print('entering motion net')
             dense_motion = self.dense_motion_network(feature=feature_3d, kp_driving=kp_driving,
                                                      kp_source=kp_source)
+            print('out motion net')
             output_dict['mask'] = dense_motion['mask']
             output_dict['heatmap'] = dense_motion['heatmap']
             output_dict['kp_source'] = dense_motion['kp_source']

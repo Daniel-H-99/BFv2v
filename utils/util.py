@@ -661,3 +661,12 @@ def euler2matrix(angles, seq='xyz', degrees=False):
     # angles = 3-d array
     return R.from_euler(seq, angles, degrees).as_matrix()
 
+def block_diagonal_batch(A, N):
+    # A: B x d x d
+    # out: B x N * d x N * d block diagonal
+    B, d = A.shape[:2]
+    eyes = torch.eye(N * d).to(A.device)
+    eyes = eyes.reshape(N, d, N, d).permute(0, 2, 1, 3).reshape(N * N, d, d)
+    out = torch.einsum('bij,njk->bnik', A, eyes) # B x N ** 2 x d x d
+    out = out.reshape(B, N, N, d, d).permute(0, 1, 3, 2, 4).reshape(B, N * d, N * d)
+    return out
