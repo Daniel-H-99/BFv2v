@@ -60,7 +60,7 @@ def filter_values(values):
     res = res
     return res
 
-def denormalize(he_estimator, mesh, img, reference_info, bias=None):
+def denormalize(he_estimator, mesh, img, reference_info, bias=None, is_src=False):
         # target pose
         print(f'img shape {img.shape}')
         with torch.no_grad():
@@ -73,9 +73,13 @@ def denormalize(he_estimator, mesh, img, reference_info, bias=None):
             bias = bias.detach().cpu()
         mesh['he_bias'] = bias
         centered_value = value.cuda() - bias.unsqueeze(0).cuda()  # N x 3
-        R_tilda = R.matmul(aux['he_R'].inverse()) # 3 x 3
+        if not is_src:
+            R_tilda = R.matmul(aux['he_R'].inverse()) # 3 x 3
+        else:
+            R_tilda = mesh['R'].inverse()
+        # t = torch.cat([t[:2], t[[2]] - 0.1], dim=0)
         mesh['he_R'], mesh['he_t'] = R_tilda.detach().cpu(), t.detach().cpu()
-        frontalized_value = (1 / mesh['c']) * torch.einsum('mp,kp->km', R_tilda, centered_value)
+        frontalized_value = (1 / mesh['c']) * torch.einsum('mp,kp->km', R_tilda.cuda(), centered_value)
         trans_value = frontalized_value + t[None]
         mesh['he_raw_value'] = trans_value.detach().cpu()
         
@@ -103,9 +107,13 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
     with torch.no_grad():
         params_drv = model.module.estimate_params(drv_data)  # x: (num_sections) x N * 3, e: (num_sections) x B x N * 3, k_e: (num_sections) x N * 3
         x_drv, e_drv, k_e_drv = params_drv['x'], params_drv['e'], params_drv['k_e']
+        # print(f'e_drv shape: {e_drv[0].shape}')
+        # print(f'k_drv shape: {k_e_drv[0].shape}')
+        
         e_normalized = [e_drv_sec / k_e_drv[i][None] for i, e_drv_sec in enumerate(e_drv)]
-        # params_src = model.module.estimate_params_v2(src_data, e_normalized, threshold=threshold)
-        params_src = model.module.estimate_params(src_data)
+        # print(f'e_normed shape: {e_normalized[0].shape}')
+        params_src = model.module.estimate_params_v3(src_data, drv_data, e_normalized, threshold=threshold)
+        # params_src = model.module.estimate_params(src_data)
         # params_src = model.module.estimate_params(src_data)  # x: (num_sections) x N * 3, e: (num_sections) x B x N * 3, k_e: (num_sections) x N * 3
         x_src, e_src, k_e_src = params_src['x'], params_src['e'], params_src['k_e']
         
@@ -125,7 +133,7 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
     for k in src_data['mesh'].keys():
         source_mesh_dict[k] = src_data['mesh'][k][0].detach().cpu()
     source_mesh_dict['he_value'] = source_mesh_dict['value']
-    denormalize(he_estimator, source_mesh_dict, src_data['frame'].cuda(), reference_info)
+    denormalize(he_estimator, source_mesh_dict, src_data['frame'].cuda(), reference_info, is_src=True)
 
     
     for i, drv_data in enumerate(tqdm(drv_dataloader)):
@@ -154,7 +162,6 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
         driven_full_mesh = source_mesh['value'][0].detach().cpu()
         driven_full_mesh[section_indices] = driven.detach().cpu()
         
-        driven_frames.append(driven_frame)
         driving_frames.append(driving_frame)
         src_frames.append(src_frame)
         driven_mesh_dict = {}
@@ -165,6 +172,8 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
         driven_mesh_dict['he_value'] = driven_full_mesh
         denormalize(he_estimator, driven_mesh_dict, drv_data['frame'].cuda(), reference_info, bias=source_mesh_dict['he_bias'])
         driven_meshes.append(driven_mesh_dict)
+        driven_frame = draw_section((config['dataset_params']['frame_shape'][0] * (driven_mesh_dict['he_raw_value'].numpy() - A)[section_indices, :2] // 2).astype(np.int32), config['dataset_params']['frame_shape'])
+        driven_frames.append(driven_frame)
         
     src_raw_mesh = config['dataset_params']['frame_shape'][0] * (model.module.concat_section(model.module.split_section(src_data['mesh']['value'])).detach().cpu().numpy()[0] + 1) // 2 
     src_raw_frame = draw_section(src_raw_mesh[:, :2].astype('int32'), config['dataset_params']['frame_shape'])
@@ -182,7 +191,7 @@ if __name__ == "__main__":
     print('running')
     if sys.version_info[0] < 3:
         raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
-    os.environ['CUDA_VISIBLE_DEVICES']='3'
+    os.environ['CUDA_VISIBLE_DEVICES']='0'
     parser = ArgumentParser()
     parser.add_argument("--config", default=None, help="path to config")
     parser.add_argument("--mode", default="train", choices=["train",])

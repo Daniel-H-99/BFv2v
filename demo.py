@@ -29,7 +29,7 @@ import math
 if sys.version_info[0] < 3:
     raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 def load_checkpoints(config, checkpoint_path, checkpoint_headmodel_path, checkpoint_posemodel_path, gen, cpu=False):
 
@@ -225,10 +225,12 @@ def preprocess_dict(d):
             
     return res
 
-def get_mesh_image_section(mesh, frame_shape):
+def get_mesh_image_section(mesh, frame_shape, section_indices):
     # mesh: N0 x 3
     # print(f'sections shape: {sections.shape}')
-    secs = draw_section(mesh[:, :2].numpy().astype(np.int32), frame_shape, split=True) # (num_sections) x H x W x 3
+    mouth_mask = (255 * draw_mouth_mask(mesh[:, :2].numpy().astype(np.int32), frame_shape)).astype(np.int32)
+
+    secs = draw_section(mesh[section_indices, :2].numpy().astype(np.int32), frame_shape, split=True, mask=mouth_mask) # (num_sections) x H x W x 3
     # print(f'draw section done')
     secs = [torch.from_numpy(sec[:, :, :1].astype(np.float32).transpose((2, 0, 1)) / 255.0) for sec in secs]
     # print('got mesh image sections')
@@ -609,6 +611,7 @@ if __name__ == "__main__":
 
             mesh['_value'] = driven_mesh['value']
             mesh['value'] = torch.tensor(source_mesh['value'])
+            mesh['raw_value'] = driven_mesh['raw_value']
             mesh['R'] = driven_mesh['R']
             mesh['c'] = driven_mesh['c']
             mesh['t'] = driven_mesh['t']
@@ -646,10 +649,10 @@ if __name__ == "__main__":
         raw_mesh = L * (raw_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
 
         # mesh['mouth_img'] = get_mouth_image(raw_mesh.numpy(),  frame_shape)
-        mesh['he_mesh_img_sec'] = get_mesh_image_section(raw_mesh[section_indices], frame_shape)
+        mesh['mesh_img_sec'] = get_mesh_image_section(raw_mesh, frame_shape, section_indices)
         # print(f'mouth image shape: {mesh["mouth_img"].shape}')
         target_meshes.append(raw_mesh[section_indices])
-        mesh['raw_value'] = np.array(raw_mesh, dtype='float32') * 2 / L + np.squeeze(A, axis=-1)[None]
+        # mesh['raw_value'] = np.array(raw_mesh, dtype='float32') * 2 / L + np.squeeze(A, axis=-1)[None]
         
 
     if opt.find_best_frame or opt.best_frame is not None:
@@ -676,8 +679,8 @@ if __name__ == "__main__":
         mesh = target_meshes[i]
         # print(f'frame type: {img_as_ubyte(frame).dtype}')
         frame = np.ascontiguousarray(img_as_ubyte(frame))
-        # meshed_frame = draw_section(mesh[:, :2].numpy().astype(np.int32), frame_shape, mask=frame)
-        meshed_frame = frame
+        meshed_frame = draw_section(mesh[:, :2].numpy().astype(np.int32), frame_shape, mask=frame)
+        # meshed_frame = frame
         # meshed_frame = (255 * driving_meshes[i]['mouth_img'].repeat(3, 1, 1).permute(1, 2, 0)).numpy().astype(np.int32)
         meshed_frames.append(meshed_frame)
 

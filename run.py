@@ -8,7 +8,7 @@ from argparse import ArgumentParser
 from time import gmtime, strftime
 from shutil import copy
 
-from frames_dataset import FramesDataset2, SingleImageDataset
+from frames_dataset import FramesDataset, SingleImageDataset
 
 from modules.generator import OcclusionAwareGenerator, OcclusionAwareSPADEGenerator
 from modules.discriminator import MultiScaleDiscriminator
@@ -27,7 +27,7 @@ if __name__ == "__main__":
     
     if sys.version_info[0] < 3:
         raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
-    os.environ['CUDA_VISIBLE_DEVICES']='1'
+    os.environ['CUDA_VISIBLE_DEVICES']='1,3'
     parser = ArgumentParser()
     parser.add_argument("--config", default="config/vox-256.yaml", help="path to config")
     parser.add_argument("--mode", default="train", choices=["train",])
@@ -37,7 +37,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_headmodel", default=None, help="path to checkpoint to restore")
     parser.add_argument("--checkpoint_posemodel", default='/home/server25/minyeong_workspace/fv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
     
-    parser.add_argument("--device_ids", default="0", type=lambda x: list(map(int, x.split(','))),
+    parser.add_argument("--device_ids", default="0,1", type=lambda x: list(map(int, x.split(','))),
                         help="Names of the devices comma separated.")
     parser.add_argument("--verbose", dest="verbose", action="store_true", help="Print model architecture")
     parser.set_defaults(verbose=False)
@@ -82,13 +82,15 @@ if __name__ == "__main__":
     if opt.verbose:
         print(generator)
 
-    discriminator = MultiScaleDiscriminator(**config['model_params']['discriminator_params'],
-                                            **config['model_params']['common_params'])
-    if torch.cuda.is_available():
-        discriminator.to(opt.device_ids[0])
-    if opt.verbose:
-        print(discriminator)
-
+    if config['train_params']['loss_weights']['generator_gan'] > 0:
+        discriminator = MultiScaleDiscriminator(**config['model_params']['discriminator_params'],
+                                                **config['model_params']['common_params'])
+        if torch.cuda.is_available():
+            discriminator.to(opt.device_ids[0])
+        if opt.verbose:
+            print(discriminator)
+    else:
+        discriminator = None
 
         
     
@@ -101,18 +103,18 @@ if __name__ == "__main__":
     # if opt.verbose:
     #     print(kp_detector)
 
-    he_estimator = HEEstimator(**config['model_params']['he_estimator_params'],
-                               **config['model_params']['common_params'])
+    # he_estimator = HEEstimator(**config['model_params']['he_estimator_params'],
+    #                            **config['model_params']['common_params'])
 
-    if torch.cuda.is_available():
-        he_estimator.to(opt.device_ids[0])
+    # if torch.cuda.is_available():
+    #     he_estimator.to(opt.device_ids[0])
 
-    ckpt = torch.load(opt.checkpoint_posemodel)
-    he_estimator.load_state_dict(ckpt['he_estimator'])
-    he_estimator.eval()
+    # ckpt = torch.load(opt.checkpoint_posemodel)
+    # he_estimator.load_state_dict(ckpt['he_estimator'])
+    # he_estimator.eval()
     
     
-    dataset = FramesDataset2(is_train=(opt.mode == 'train'), **config['dataset_params'], train_params=config['train_params'])
+    dataset = FramesDataset(is_train=(opt.mode == 'train'), **config['dataset_params'], train_params=config['train_params'])
     
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
@@ -121,4 +123,4 @@ if __name__ == "__main__":
 
     if opt.mode == 'train':
         print("Training...")
-        train(config, generator, discriminator, None, he_estimator, opt.checkpoint, log_dir, dataset, opt.device_ids)
+        train(config, generator, discriminator, None, None, opt.checkpoint, log_dir, dataset, opt.device_ids)

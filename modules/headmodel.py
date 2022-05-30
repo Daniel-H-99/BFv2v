@@ -388,6 +388,176 @@ class HeadModel(nn.Module):
         
         return loss_values, generated
         
+        
+    def estimate_params_section_v3(self, x, R_src, R, e_normalized, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err, num_kp, threshold=None):
+        # x: B x N * 3   
+        
+        assert x is not None
+        
+        # x: B x N * 3   
+        # R: B x 3 x 3
+        
+        ### Src ###
+        assert x is not None
+        
+        print(f'R_src shape: {R_src.shape}')
+        ignore_axis = R_src[:, :, [2]].cuda() # B x 3 x 1
+        ignore_matrix = ignore_axis @ ignore_axis.transpose(1, 2) # B x 3 x 3
+        filter_matrix = torch.eye(3)[None].cuda() - ignore_matrix # B x 3 x 3
+        P = ignore_matrix
+        F = filter_matrix
+        N = x.shape[1] // 3
+        B = x.shape[0]
+        # print(f'filter matrix shape: {filter_matrix.shape}')
+        # print(f'N: {N}')
+        x = x - mu_x[None]
+        k_e = self.get_scale(x, scaler).mean(dim=0) # n * 3
+        x = x.unsqueeze(2)
+        
+        u_e = k_e.unsqueeze(1) * u_e    # 3 * num_kp x num_pc
+        num_items = len(x)
+        num_pc = u_e.size(1)
+        
+        A_e = u_e @ s_e
+        A_x = u_x @ s_x
+        sigma_err_i = (P.transpose(1, 2).matmul(P) / (1 * self.s_err_square) + F.transpose(1, 2).matmul(F) / (1 * self.s_err_square)).inverse() # B x 3 x 3
+        # print(f'sigma_err_i shape: {sigma_err_i.shape}')
+        # print(f' shape: {sigma_err_i.shape}')
+        sigma_err_i = block_diagonal_batch(sigma_err_i, N)
+        sigma_e_i = (A_e.t().matmul(sigma_err_i).matmul(A_e) + torch.eye(A_e.size(1)).cuda()[None]).inverse()
+        A_tilda_x_i = -sigma_e_i.matmul(A_e.t()).matmul(sigma_err_i.inverse()).matmul(A_x)
+        B_tilda_x_i = -sigma_e_i.matmul(A_e.t()).matmul(sigma_err_i.inverse()).matmul(x)
+        A_star_x_i = A_e.matmul(A_tilda_x_i) + A_x[None]
+        B_star_x_i = A_e.matmul(B_tilda_x_i) + x
+        # print(f'A_tilda_x_i: {A_tilda_x_i.shape}')
+        # print(f'B_tilda_x_i: {B_tilda_x_i.shape}')
+        # print(f'A_star_x_i: {A_star_x_i.shape}')
+        # print(f'B_star_x_i: {B_star_x_i.shape}')
+        # print(f'sigma_err_i: {sigma_err_i.shape}')
+        # print(f'sigma_e_i: {sigma_e_i.shape}')
+        sigma_x_i = (A_star_x_i.transpose(1, 2).matmul(sigma_err_i.inverse()).matmul(A_star_x_i) + A_tilda_x_i.transpose(1, 2) @ A_tilda_x_i).inverse()
+        mu_x_i = sigma_x_i.matmul(A_star_x_i.transpose(1, 2).matmul(sigma_err_i.inverse()).matmul(B_star_x_i) + A_tilda_x_i.transpose(1, 2).matmul(B_tilda_x_i))
+        sigma_x_total = sigma_x_i.inverse().sum(dim=0).inverse()
+        mu_x_total = sigma_x_total.matmul(sigma_x_i.inverse().matmul(mu_x_i).sum(dim=0))
+        sigma_x_final = (sigma_x_total.inverse() / num_items + 1000000 * torch.eye(num_pc).cuda()).inverse()
+        mu_x_final = sigma_x_final.matmul(sigma_x_total.inverse().matmul(mu_x_total) / num_items)
+        sigma_x_src = sigma_x_final 
+        mu_x_src = mu_x_final
+        # print(f'posterior: {sigma_x_src}, {mu_x_src}')
+        
+        # sigma_x_src = torch.eye(len(sigma_x_src)).cuda()
+        # mu_x_src = torch.zeros_like(mu_x_src)
+        # print(f'prior: {sigma_x_src}, {mu_x_src}')
+        
+        # print(f'R shape: {R.shape}')
+        ignore_axis = R[:, :, [2]].cuda() # B x 3 x 1
+        ignore_matrix = ignore_axis @ ignore_axis.transpose(1, 2) # B x 3 x 3
+        filter_matrix = torch.eye(3)[None].cuda() - ignore_matrix # B x 3 x 3
+        P = ignore_matrix
+        F = filter_matrix
+        N = x.shape[1] // 3
+        B = x.shape[0]
+        # print(f'filter matrix shape: {filter_matrix.shape}')
+        # print(f'N: {N}')
+        
+        num_items = len(R)
+        num_pc = u_e.size(1)
+        
+        e_driven = e_normalized * k_e[None]
+        # print(f'e_normalized shape: {e_normalized.shape}')
+        A_e = u_e @ s_e
+        A_x = u_x @ s_x
+        sigma_err_i = (P.transpose(1, 2).matmul(P) / (self.s_err_square) + F.transpose(1, 2).matmul(F) / (self.s_err_square)).inverse() # B x 3 x 3
+        # print(f'sigma_err_i shape: {sigma_err_i.shape}')
+        # print(f' shape: {sigma_err_i.shape}')
+        sigma_err_i = block_diagonal_batch(sigma_err_i, N)
+        sigma_e_i = (A_e.t().matmul(sigma_err_i).matmul(A_e) + torch.eye(A_e.size(1)).cuda()[None]).inverse()
+        A_tilda_x_i = -sigma_e_i.matmul(A_e.t()).matmul(sigma_err_i.inverse()).matmul(A_x)
+        B_tilda_x_i = -sigma_e_i.matmul(A_e.t()).matmul(sigma_err_i.inverse()).matmul(x)
+        A_star_x_i = A_e.matmul(A_tilda_x_i) + A_x[None]
+        B_star_x_i = A_e.matmul(B_tilda_x_i) + x
+        # print(f'A_tilda_x_i: {A_tilda_x_i.shape}')
+        # print(f'B_tilda_x_i: {B_tilda_x_i.shape}')
+        # print(f'A_star_x_i: {A_star_x_i.shape}')
+        # print(f'B_star_x_i: {B_star_x_i.shape}')
+        # print(f'sigma_err_i: {sigma_err_i.shape}')
+        # print(f'sigma_e_i: {sigma_e_i.shape}')
+        sigma_x_i = (A_star_x_i.transpose(1, 2).matmul(sigma_err_i.inverse()).matmul(A_star_x_i) + A_tilda_x_i.transpose(1, 2) @ A_tilda_x_i).inverse()
+        mu_x_i = sigma_x_i.matmul(A_star_x_i.transpose(1, 2).matmul(sigma_err_i.inverse()).matmul(B_star_x_i) + A_tilda_x_i.transpose(1, 2).matmul(B_tilda_x_i))
+        sigma_x_total = sigma_x_i.inverse().sum(dim=0).inverse()
+        mu_x_total = sigma_x_total.matmul(sigma_x_i.inverse().matmul(mu_x_i).sum(dim=0))
+        sigma_x_final = (sigma_x_total.inverse() / num_items + sigma_x_src.inverse()).inverse()
+        print(f'pre sigma: {num_items * sigma_x_total}')
+        print(f'post sigma: {sigma_x_final}')
+        mu_x_final = sigma_x_final.matmul(sigma_x_total.inverse().matmul(mu_x_total) / num_items)
+        A_hat_i = - sigma_e_i.matmul(A_e.t()).matmul(sigma_err_i.inverse())
+        A_ohm_i = A_star_x_i.transpose(1, 2).matmul(sigma_err_i.inverse()).matmul(A_e.matmul(A_hat_i) + torch.eye(len(A_e)).cuda()[None].repeat(len(A_hat_i), 1, 1)) + A_tilda_x_i.transpose(1, 2).matmul(A_hat_i)
+        print(f'A_ha_i shape: {A_hat_i.shape}')
+        print(f'A_ohm_i shape: {A_ohm_i.shape}')
+        w = (torch.eye(len(sigma_x_final)).cuda() - 1 / num_items * sigma_x_final @ (A_ohm_i.matmul(A_x).sum(0))).inverse().matmul(sigma_x_final).matmul(torch.einsum('bkn,bn->bk',A_ohm_i, e_driven).sum(0) / num_items + sigma_x_src.inverse().matmul(mu_x_src).squeeze(1))
+        print(f'w shape: {w.shape}')
+        # sigma_inverse = filter_matrix.transpose(1, 2) @ (torch.eye(A_e.size(0)).cuda() - A_e @ sigma_e @ A_e.t()) @ filter_matrix
+        # sigma_x = (A_x.t() @ sigma_inverse @ A_x).inverse()
+        # mu_xs = sigma_x @ A_x.t() @ sigma_inverse @ x.unsqueeze(2) # B x num_pc x 1
+        # sigma_x_total = (sigma_x.inverse() / self.s_err_square + torch.eye(sigma_x.size(0)).cuda()).inverse()
+        # # sigma_x_total = (len(x) * sigma_x.inverse() / self.s_err_square + torch.eye(sigma_x.size(0)).cuda()).inverse()
+        # mu_x_total = sigma_x_total @ sigma_x.inverse() @ mu_xs.sum(dim=0) / (self.s_err_square * len(x)) # 3 * num_kp x 1
+        
+        
+        
+        # sigma_inverse = torch.eye(A_e.size(0))
+        # sigma_x = ()
+        # sigma_e_square_inverse = u_e @ (u_e.t() @ u_e).inverse() @ s_e.inverse().t() @ s_e.inverse() @ (u_e.t() @ u_e).inverse() @ u_e.t()
+        # sigma_x_square_inverse = u_x @ s_x.inverse().t() @ s_x.inverse() @ u_x.t()
+        # sigma_inverse = (sigma_err.inverse() + sigma_e_square_inverse).inverse()
+        # sigma_inverse = sigma_err.inverse() - sigma_err.inverse() @ sigma_inverse @ sigma_err.inverse()
+        # sigma_x_X_square_inverse = sigma_x_square_inverse + \
+        #     len(x) * sigma_inverse
+        # mu_x_X = sigma_x_X_square_inverse.inverse() @ (0 * sigma_x_square_inverse @ mu_x.unsqueeze(1) + \
+        #     torch.stack([((torch.eye(len(sigma_err)).cuda() - (torch.eye(len(sigma_err)).cuda() + sigma_e_square_inverse @ sigma_err).inverse()) @ sigma_err.inverse() @ X.unsqueeze(1)) for X in x], dim=0).sum(dim=0))
+        
+        # print(f'test: {sigma_x_X_square_inverse.inverse() @ sigma_x_X_square_inverse}')
+        # mu_x_X = mu_x.unsqueeze(1)
+        # mu_x_X = x[0].unsqueeze(1)
+        # print(f'k_e: {mu_x_X}')
+        # print(f'simga x square inverse: {sigma_e_square_inverse}')
+        # print(f'simga e square inverse: {sigma_e_square_inverse}')
+        # print(f'simga e square inverse: {sigma_e_square_inverse}')
+        # print(f'simga e square inverse: {sigma_e_square_inverse}')
+        kp_reg_e = x.squeeze(2) - (A_x.matmul(w))[None]   # B x N * 3
+        kp_reg_x = (A_x.matmul(w)) + mu_x   # N * 3
+
+        return {'x': kp_reg_x, 'e': kp_reg_e, 'k_e': k_e}
+   
+      
+    def estimate_params_v3(self, x, drv_data, e_normalized, threshold=None):
+        # data: {v: B x ...}
+        bs = len(x['mesh']['value'])
+    
+        kp = x['mesh']
+        
+        kp_reg_xs = []
+        kp_reg_es = []
+        k_es = []
+        
+        secs = self.split_section(kp['value'].cuda())
+        
+        for i, sec in enumerate(secs):
+            mu_x = self.getattr(f'mu_x_{i}')
+            u_x = self.getattr(f'u_x_{i}')
+            s_x = self.getattr(f's_x_{i}')
+            u_e = self.getattr(f'u_e_{i}')
+            s_e = self.getattr(f's_e_{i}')
+            sigma_err = self.getattr(f'sigma_err_{i}')
+            
+            kp_reg = self.estimate_params_section_v3(sec.flatten(1), kp['R'], drv_data['mesh']['R'], e_normalized[i], self.scalers[i], mu_x, u_x, s_x, u_e, s_e, sigma_err, self.sections[i][1], threshold=threshold)
+            
+            kp_reg_xs.append(kp_reg['x'])   # num_kp * 3
+            kp_reg_es.append(kp_reg['e'])   # B x num_kp * 3
+            k_es.append(kp_reg['k_e'])      # num_kp * 3
+        
+        return {'x': kp_reg_xs, 'e': kp_reg_es, 'k_e': k_es}
+    
     def estimate_params_section_v2(self, x, R, e_normalized, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err, num_kp, threshold=None):
         # x: B x N * 3   
         
@@ -410,12 +580,7 @@ class HeadModel(nn.Module):
         A_x = u_x @ s_x
         sigma_e = (A_e.t() @ A_e + torch.eye(A_e.size(1)).cuda() * self.s_err_square).inverse()
         sigma_inverse = torch.eye(A_e.size(0)).cuda() - A_e @ sigma_e @ A_e.t()
-        ### ignore z ###
-        tmp = sigma_inverse.t().view(3 * N , N, 3)
-        tmp = torch.einsum('nip,bpj->bnij', tmp, filter_matrix).view(B, 3 * N , 3 * N).transpose(1, 2) # B x 3 * N x 3 * N
-        tmp = tmp.t().view(B, 3 * N , N, 3)
-        tmp = torch.einsum('nip,bpj->bnij', tmp, filter_matrix).view(B, 3 * N , 3 * N) # B x 3 * N x 3 * N
-        sigma_inverse = tmp
+
         ################
         sigma_x = (A_x.t() @ sigma_inverse @ A_x).inverse()
         mu_xs = sigma_x @ A_x.t() @ sigma_inverse @ x.unsqueeze(2) # B x num_pc x 1
@@ -519,8 +684,8 @@ class HeadModel(nn.Module):
         F = filter_matrix
         N = x.shape[1] // 3
         B = x.shape[0]
-        print(f'filter matrix shape: {filter_matrix.shape}')
-        print(f'N: {N}')
+        # print(f'filter matrix shape: {filter_matrix.shape}')
+        # print(f'N: {N}')
         x = x - mu_x[None]
         k_e = self.get_scale(x, scaler).mean(dim=0) # n * 3
         x = x.unsqueeze(2)
@@ -532,25 +697,25 @@ class HeadModel(nn.Module):
         A_e = u_e @ s_e
         A_x = u_x @ s_x
         sigma_err_i = (P.transpose(1, 2).matmul(P) / (1 * self.s_err_square) + F.transpose(1, 2).matmul(F) / self.s_err_square).inverse() # B x 3 x 3
-        print(f'sigma_err_i shape: {sigma_err_i.shape}')
-        print(f' shape: {sigma_err_i.shape}')
+        # print(f'sigma_err_i shape: {sigma_err_i.shape}')
+        # print(f' shape: {sigma_err_i.shape}')
         sigma_err_i = block_diagonal_batch(sigma_err_i, N)
         sigma_e_i = (A_e.t().matmul(sigma_err_i).matmul(A_e) + torch.eye(A_e.size(1)).cuda()[None]).inverse()
         A_tilda_x_i = -sigma_e_i.matmul(A_e.t()).matmul(sigma_err_i.inverse()).matmul(A_x)
         B_tilda_x_i = -sigma_e_i.matmul(A_e.t()).matmul(sigma_err_i.inverse()).matmul(x)
         A_star_x_i = A_e.matmul(A_tilda_x_i) + A_x[None]
         B_star_x_i = A_e.matmul(B_tilda_x_i) + x
-        print(f'A_tilda_x_i: {A_tilda_x_i.shape}')
-        print(f'B_tilda_x_i: {B_tilda_x_i.shape}')
-        print(f'A_star_x_i: {A_star_x_i.shape}')
-        print(f'B_star_x_i: {B_star_x_i.shape}')
-        print(f'sigma_err_i: {sigma_err_i.shape}')
-        print(f'sigma_e_i: {sigma_e_i.shape}')
+        # print(f'A_tilda_x_i: {A_tilda_x_i.shape}')
+        # print(f'B_tilda_x_i: {B_tilda_x_i.shape}')
+        # print(f'A_star_x_i: {A_star_x_i.shape}')
+        # print(f'B_star_x_i: {B_star_x_i.shape}')
+        # print(f'sigma_err_i: {sigma_err_i.shape}')
+        # print(f'sigma_e_i: {sigma_e_i.shape}')
         sigma_x_i = (A_star_x_i.transpose(1, 2).matmul(sigma_err_i.inverse()).matmul(A_star_x_i) + A_tilda_x_i.transpose(1, 2) @ A_tilda_x_i).inverse()
         mu_x_i = sigma_x_i.matmul(A_star_x_i.transpose(1, 2).matmul(sigma_err_i.inverse()).matmul(B_star_x_i) + A_tilda_x_i.transpose(1, 2).matmul(B_tilda_x_i))
         sigma_x_total = sigma_x_i.inverse().sum(dim=0).inverse()
         mu_x_total = sigma_x_total.matmul(sigma_x_i.inverse().matmul(mu_x_i).sum(dim=0))
-        sigma_x_final = (sigma_x_total.inverse() / num_items + torch.eye(num_pc).cuda()).inverse()
+        sigma_x_final = (sigma_x_total.inverse() / num_items + 10000 * torch.eye(num_pc).cuda()).inverse()
         mu_x_final = sigma_x_final.matmul(sigma_x_total.inverse().matmul(mu_x_total) / num_items)
         
         # sigma_inverse = filter_matrix.transpose(1, 2) @ (torch.eye(A_e.size(0)).cuda() - A_e @ sigma_e @ A_e.t()) @ filter_matrix
@@ -581,7 +746,9 @@ class HeadModel(nn.Module):
         # print(f'simga e square inverse: {sigma_e_square_inverse}')
         # print(f'simga e square inverse: {sigma_e_square_inverse}')
         # print(f'simga e square inverse: {sigma_e_square_inverse}')
-        kp_reg_e = x - (A_x @ mu_x_final).squeeze(1)[None]   # B x N * 3
+        # print(f'mu_x_final shape: {mu_x_final.shape}')
+        # print(f'mu_x_final shape: {mu_x_final.shape}')
+        kp_reg_e = x.squeeze(2) - (A_x @ mu_x_final).squeeze(1)[None]   # B x N * 3
         kp_reg_x = (A_x @ mu_x_final.squeeze(1)) + mu_x   # N * 3
 
         return {'x': kp_reg_x, 'e': kp_reg_e, 'k_e': k_e}
@@ -632,6 +799,9 @@ class HeadModel(nn.Module):
             e_drv = sec.flatten(0) - x_drv[i]
             coef = A_e_drv.t()
             ### ignore z ###
+            # if len(driven) >=2:
+            #     momentum = driven[-1] - driven[-2] # N x 3
+                
             R = drv['mesh']['R'][0].cuda() # 3 x 3
             print(f'R shape: {R.shape}')
             ignore_axis = R[:, [2]] # 3 x 1
@@ -642,7 +812,7 @@ class HeadModel(nn.Module):
             N = sec.shape[0]
             num_kp = A_e_drv.size(1)
             print(f'filter matrix shape: {filter_matrix.shape}')
-            sigma_err_i = (P.t() @ P / (10000 * self.s_err_square) + F.t() @ F / self.s_err_square).inverse()
+            sigma_err_i = (P.t() @ P / (100 * self.s_err_square) + F.t() @ F / self.s_err_square).inverse()
             sigma_err_i = block_diagonal_batch(sigma_err_i[None], N).squeeze(0)
             sigma_e_i = (A_e_drv.t() @ sigma_err_i.inverse() @ A_e_drv + torch.eye(num_kp).cuda()).inverse()
             mu_e_i = sigma_e_i @ A_e_drv.t() @ sigma_err_i.inverse() @ e_drv.unsqueeze(1)

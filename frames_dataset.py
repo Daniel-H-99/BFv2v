@@ -87,6 +87,7 @@ class SingleImageDataset(Dataset):
         mesh['c'] = np.array(mesh['c'], dtype='float32')
         t = np.array(mesh['t'], dtype='float32')
         mesh['t'] = (np.eye(3).astype(np.float32) - mesh['c'] * mesh['R']) @ A + t * 2 / L
+        mesh['raw_value'] = np.array(mesh['raw_value'], dtype='float32') * 2 / L + np.squeeze(A, axis=-1)[None]
        
         out = {}
         # if self.is_train:
@@ -122,7 +123,8 @@ class SingleVideoDataset(Dataset):
                 mesh['c'] = np.array(mesh['c'], dtype='float32')
                 t = np.array(mesh['t'], dtype='float32')
                 mesh['t'] = (np.eye(3).astype(np.float32) - mesh['c'] * mesh['R']) @ A + t * 2 / L
-            
+                mesh['raw_value'] = np.array(mesh['raw_value'], dtype='float32') * 2 / L + np.squeeze(A, axis=-1)[None]
+
                 out = {}
                 # if self.is_train:
                 frame = np.array(frame, dtype='float32')
@@ -178,7 +180,7 @@ class FramesDataset2(Dataset):
             self.transform = None
 
     def __len__(self):
-        return len(self.ids) // 3
+        return len(self.ids)
 
     def split_section(self, X):
         res = []
@@ -339,7 +341,7 @@ class FramesDataset(Dataset):
             self.transform = None
             
     def __len__(self):
-        return len(self.videos) // 100
+        return len(self.videos) // 2
 
     def split_section(self, X):
         res = []
@@ -360,9 +362,13 @@ class FramesDataset(Dataset):
     
     def get_mesh_image_section(self, mesh):
         # mesh: N0 x 3
+        # print(f'mesh type: {mesh.type()}')
+        mouth_mask = (255 * draw_mouth_mask(mesh[:, :2].numpy().astype(np.int32), self.frame_shape)).astype(np.int32)
+        # print(f'mouth mask shape {mouth_mask.type()}')
         sections = self.concat_section(self.split_section(mesh))
         # print(f'sections shape: {sections.shape}')
-        secs = draw_section(sections[:, :2].astype(np.int32), self.frame_shape, split=True) # (num_sections) x H x W x 3
+        
+        secs = draw_section(sections[:, :2].astype(np.int32), self.frame_shape, split=True, mask=mouth_mask) # (num_sections) x H x W x 3
         # print(f'draw section done')
         secs = [sec[:, :, :1].astype(np.float32).transpose((2, 0, 1)) / 255.0 for sec in secs]
         # print('got mesh image sections')
@@ -384,7 +390,7 @@ class FramesDataset(Dataset):
                 # if self.is_train and os.path.isdir(path):
                 frames = os.listdir(path)
                 num_frames = len(frames)
-                frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2))
+                frame_idx = np.sort(np.random.choice(num_frames, replace=False, size=2))
                 frame_idx[1] = (frame_idx[1] + 100) % num_frames
                 raw_video_array = [io.imread(os.path.join(path, frames[(idx + int(datetime.now().timestamp())) % num_frames])) for idx in frame_idx]
                 video_array = np.stack([cv2.resize(img_as_float32(frame), self.frame_shape[:2]) for frame in raw_video_array], axis=0)
@@ -440,9 +446,9 @@ class FramesDataset(Dataset):
                 src_mesh = meshes[0]
                 drv_mesh = meshes[1]
                 target_mesh = (1 / src_mesh['c'][np.newaxis, np.newaxis]) * np.einsum('ij,nj->ni', np.linalg.inv(src_mesh['R']), drv_mesh['value'] - src_mesh['t'][np.newaxis, :, 0])
-                drv_mesh['intermediate_value'] = target_mesh
+                # drv_mesh['intermediate_value'] = target_mesh
                 target_mesh = L * (target_mesh - np.squeeze(A, axis=-1)[None]) // 2
-                drv_mesh['intermediate_mesh_img_sec'] = self.get_mesh_image_section(target_mesh)
+                # drv_mesh['intermediate_mesh_img_sec'] = self.get_mesh_image_section(target_mesh)
                 
                 break
             except Exception as e:

@@ -18,22 +18,25 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
     train_params = config['train_params']
 
     optimizer_generator = torch.optim.Adam(generator.parameters(), lr=train_params['lr_generator'], betas=(0.5, 0.999))
-    optimizer_discriminator = torch.optim.Adam(discriminator.parameters(), lr=train_params['lr_discriminator'], betas=(0.5, 0.999))
+    if discriminator is not None:
+        optimizer_discriminator = torch.optim.Adam(discriminator.parameters(), lr=train_params['lr_discriminator'], betas=(0.5, 0.999))
+    else:
+        optimizer_discriminator = None
     # optimizer_kp_detector = torch.optim.Adam(kp_detector.parameters(), lr=train_params['lr_kp_detector'], betas=(0.5, 0.999))
     # optimizer_he_estimator = torch.optim.Adam(he_estimator.parameters(), lr=train_params['lr_he_estimator'], betas=(0.5, 0.999))
 
     if checkpoint is not None:
         start_epoch = Logger.load_cpk(checkpoint, generator, discriminator, None, None, None, 
                                       optimizer_generator, optimizer_discriminator)
-
         # start_epoch = 0
     else:
         start_epoch = 0
 
     scheduler_generator = MultiStepLR(optimizer_generator, train_params['epoch_milestones'], gamma=0.1,
                                       last_epoch= start_epoch - 1)
-    scheduler_discriminator = MultiStepLR(optimizer_discriminator, train_params['epoch_milestones'], gamma=0.1,
-                                          last_epoch=start_epoch - 1)
+    if discriminator is not None:
+        scheduler_discriminator = MultiStepLR(optimizer_discriminator, train_params['epoch_milestones'], gamma=0.1,
+                                            last_epoch=start_epoch - 1)
     # scheduler_kp_detector = MultiStepLR(optimizer_kp_detector, train_params['epoch_milestones'], gamma=0.1,
     #                                     last_epoch=-1 + start_epoch * (train_params['lr_kp_detector'] != 0))
     # scheduler_he_estimator = MultiStepLR(optimizer_he_estimator, train_params['epoch_milestones'], gamma=0.1,
@@ -43,20 +46,23 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
         dataset = DatasetRepeater(dataset, train_params['num_repeats'])
     dataloader = DataLoader(dataset, batch_size=train_params['batch_size'], shuffle=True, num_workers=0, drop_last=True)
 
-    # load reference info
-    ref_path = '/home/server25/minyeong_workspace/BFv2v/frame_reference.png'
-    reference_dataset = SingleImageDataset(ref_path)
-    ref_img_data = iter(DataLoader(reference_dataset, batch_size=1, shuffle=False, num_workers=0, drop_last=False)).next()
-    with torch.no_grad():
-        he_ref = he_estimator(ref_img_data['frame'].cuda())
-    reference_info = {'R': ref_img_data['mesh']['R'][0].cuda(), 't': ref_img_data['mesh']['t'][0].cuda(), 'c': ref_img_data['mesh']['c'][0].cuda(), 'he_R': he_ref['R'][0].cuda(), 'he_t': he_ref['t'][0].cuda(), 'img': ref_img_data['frame'][0].permute(1, 2, 0).cuda()}
+    # # load reference info
+    # ref_path = '/home/server25/minyeong_workspace/BFv2v/frame_reference.png'
+    # reference_dataset = SingleImageDataset(ref_path)
+    # ref_img_data = iter(DataLoader(reference_dataset, batch_size=1, shuffle=False, num_workers=0, drop_last=False)).next()
+    # with torch.no_grad():
+    #     he_ref = he_estimator(ref_img_data['frame'].cuda())
+    # reference_info = {'R': ref_img_data['mesh']['R'][0].cuda(), 't': ref_img_data['mesh']['t'][0].cuda(), 'c': ref_img_data['mesh']['c'][0].cuda(), 'he_R': he_ref['R'][0].cuda(), 'he_t': he_ref['t'][0].cuda(), 'img': ref_img_data['frame'][0].permute(1, 2, 0).cuda()}
     
-    generator_full = GeneratorFullModel(kp_detector, he_estimator, generator, discriminator, train_params, estimate_jacobian=config['model_params']['common_params']['estimate_jacobian'], reference_info=reference_info)
-    discriminator_full = DiscriminatorFullModel(kp_detector, generator, discriminator, train_params)
+    generator_full = GeneratorFullModel(kp_detector, he_estimator, generator, discriminator, train_params, estimate_jacobian=config['model_params']['common_params']['estimate_jacobian'])
+    
+    if discriminator is not None:
+        discriminator_full = DiscriminatorFullModel(kp_detector, generator, discriminator, train_params)
 
     if torch.cuda.is_available():
         generator_full = DataParallelWithCallback(generator_full, device_ids=device_ids)
-        discriminator_full = DataParallelWithCallback(discriminator_full, device_ids=device_ids)
+        if discriminator is not None:
+            discriminator_full = DataParallelWithCallback(discriminator_full, device_ids=device_ids)
 
 
     regularizor_weight_0 = train_params['loss_weights']['regularizor']
@@ -75,6 +81,8 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
 
                 loss.backward()
                 optimizer_generator.step()
+                if discriminator is not None:
+                    optimizer_discriminator.zero_grad()
                 optimizer_generator.zero_grad()
                 # optimizer_kp_detector.step()
                 # optimizer_kp_detector.zero_grad()
@@ -99,11 +107,16 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
                 logger.log_iter(losses=losses)
 
             scheduler_generator.step()
-            scheduler_discriminator.step()
+            if discriminator is not None:
+                scheduler_discriminator.step()
             # scheduler_kp_detector.step()
             # scheduler_he_estimator.step()
             print(f'generated keys: {generated.keys()}')
-            logger.log_epoch(epoch, {'generator': generator,
-                                     'discriminator': discriminator,
-                                     'optimizer_generator': optimizer_generator,
-                                     'optimizer_discriminator': optimizer_discriminator,}, inp=x, out=generated)
+            if discriminator is not None:
+                logger.log_epoch(epoch, {'generator': generator,
+                                        'discriminator': discriminator,
+                                        'optimizer_generator': optimizer_generator,
+                                        'optimizer_discriminator': optimizer_discriminator,}, inp=x, out=generated)
+            else:
+                logger.log_epoch(epoch, {'generator': generator,
+                            'optimizer_generator': optimizer_generator,}, inp=x, out=generated)

@@ -1,3 +1,4 @@
+from pkg_resources import split_sections
 from torch import nn
 import torch
 import torch.nn.functional as F
@@ -266,7 +267,8 @@ class GeneratorFullModel(torch.nn.Module):
         self.discriminator = discriminator
         self.train_params = train_params
         self.scales = train_params['scales']
-        self.disc_scales = self.discriminator.scales
+        if discriminator is not None:
+            self.disc_scales = self.discriminator.scales
         self.pyramid = ImagePyramide(self.scales, generator.image_channel)
         self.pyramid_cond = ImagePyramide(self.scales, generator.image_channel + 1)
         if torch.cuda.is_available():
@@ -310,9 +312,9 @@ class GeneratorFullModel(torch.nn.Module):
         
             self.register_buffer(f'sigma_err_{i}', (torch.eye(3 * len(sec[0])) * self.train_params['sigma_err']).cuda())
 
-        ### reference_info ###
-        self.reference_info = reference_info # {he_R, he_t, img}
-        self.frame_shape = self.reference_info['img'].shape
+        # ### reference_info ###
+        # self.reference_info = reference_info # {he_R, he_t, img}
+        # self.frame_shape = self.reference_info['img'].shape
         
         
     def getattr(self, name):
@@ -502,6 +504,7 @@ class GeneratorFullModel(torch.nn.Module):
             mesh['he_mesh_img_sec'] = torch.stack(he_mesh_img_secs, dim=0).cuda().transpose(0, 1)
             print(f'image sec shape: {mesh["he_mesh_img_sec"].shape}')
             print('loaded')
+            
     def calc_reg_loss(self, xs, es):
         # xs, es: (num_section) x N_i * 3
         loss_reg = 0
@@ -567,8 +570,8 @@ class GeneratorFullModel(torch.nn.Module):
         kp_source = x['source_mesh']
         kp_driving = x['driving_mesh']
         
-        self.denormalize(kp_source, x['source'])        # {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 's_e': s_e}
-        self.denormalize(kp_driving, x['driving'])      # {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 's_e': s_e}
+        # self.denormalize(kp_source, x['source'])        # {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 's_e': s_e}
+        # self.denormalize(kp_driving, x['driving'])      # {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 's_e': s_e}
 
         
         # driving_224 = x['hopenet_driving']
@@ -607,12 +610,12 @@ class GeneratorFullModel(torch.nn.Module):
         print('entering generator')
         generated = self.generator(x['source'], kp_source=kp_source, kp_driving=kp_driving)
         print('out generator')
-        src_section = self.concat_section(self.split_section(kp_source['he_raw_value']))
-        tgt_section = self.concat_section(self.split_section(kp_driving['he_raw_value']))
+        # src_section = self.concat_section(self.split_section(kp_source['he_raw_value']))
+        # tgt_section = self.concat_section(self.split_section(kp_driving['he_raw_value']))
         # print(f'src section: {src_section}')
         # print(f'drv section: {tgt_section}')
-        generated['kp_source'] = {'value': src_section}
-        generated['kp_driving'] = {'value': tgt_section}
+        # generated['kp_source'] = {'value': src_section}
+        # generated['kp_driving'] = {'value': tgt_section}
         # seg_loss = self.calc_seg_loss(generated['mask'], generated['heatmap'])
         
         # loss_values['segmentation'] = self.loss_weights['segmentation'] * seg_loss
@@ -624,13 +627,13 @@ class GeneratorFullModel(torch.nn.Module):
         if self.loss_weights['motion_match'] != 0:
             motion = generated['deformation'] # B x d x h x w x 3
             motion = motion.permute(0, 4, 1, 2, 3) # B x 3 x d x h x w
-            it_section = kp_driving['he_raw_value'] # B x N x 3
-            motion_GT = kp_source['he_raw_value'] # B x N x 3
+            it_section = kp_driving['raw_value'] # B x N x 3
+            motion_GT = kp_source['raw_value'] # B x N x 3
             motion_section = F.grid_sample(motion, it_section[:, :, None, None])
             motion_section = motion_section.squeeze(4).squeeze(3).transpose(1,2) # B x N x 3
             # print(f'motion Gt size {motion_GT.shape}')
             # print(f'motion size {motion_section.shape}')
-            loss_values['motion_match'] = self.loss_weights['motion_match'] * F.l1_loss(motion_section, motion_GT)
+            loss_values['motion_match'] = self.loss_weights['motion_match'] * F.l1_loss(self.concat_section(self.split_section(motion_section)), self.concat_section(self.split_section(motion_GT)))
 
         if self.loss_weights['coefs_match'] != 0:
             motion = generated['move'] # B x D x H x W x 3
@@ -679,7 +682,7 @@ class GeneratorFullModel(torch.nn.Module):
 
         if self.loss_weights['generator_gan'] != 0:
             pyramide_real = self.pyramid_cond(torch.cat([kp_driving['mesh_img'].cuda(), x['driving']], dim=1))
-            pyramide_generated = self.pyramid_cond(torch.cat([kp_driving['he_mesh_img'].cuda(), generated['prediction']], dim=1))
+            pyramide_generated = self.pyramid_cond(torch.cat([kp_driving['mesh_img'].cuda(), generated['prediction']], dim=1))
             discriminator_maps_generated = self.discriminator(pyramide_generated)
             discriminator_maps_real = self.discriminator(pyramide_real)
             
