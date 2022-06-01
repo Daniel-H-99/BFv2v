@@ -21,7 +21,7 @@ from modules.keypoint_detector import KPDetector, HEEstimator
 from animate import normalize_kp
 from scipy.spatial import ConvexHull
 from modules.headmodel import HeadModel
-from utils.util import extract_mesh, draw_section, draw_mouth_mask, matrix2euler, euler2matrix
+from utils.util import extract_mesh, draw_section, draw_mouth_mask, matrix2euler, euler2matrix, get_mesh_image
 from utils.one_euro_filter import OneEuroFilter
 import cv2
 import math
@@ -228,11 +228,11 @@ def preprocess_dict(d):
 def get_mesh_image_section(mesh, frame_shape, section_indices):
     # mesh: N0 x 3
     # print(f'sections shape: {sections.shape}')
-    mouth_mask = (255 * draw_mouth_mask(mesh[:, :2].numpy().astype(np.int32), frame_shape)).astype(np.int32)
+    # mouth_mask = (255 * draw_mouth_mask(mesh[:, :2].numpy().astype(np.int32), frame_shape)).astype(np.int32)
 
-    secs = draw_section(mesh[section_indices, :2].numpy().astype(np.int32), frame_shape, split=True, mask=mouth_mask) # (num_sections) x H x W x 3
+    secs = draw_section(mesh[section_indices, :2].numpy().astype(np.int32), frame_shape, split=False) # (num_sections) x H x W x 3
     # print(f'draw section done')
-    secs = [torch.from_numpy(sec[:, :, :1].astype(np.float32).transpose((2, 0, 1)) / 255.0) for sec in secs]
+    secs = torch.from_numpy(secs[:, :, :1].astype(np.float32).transpose((2, 0, 1)) / 255.0)
     # print('got mesh image sections')
     return secs
     
@@ -365,6 +365,7 @@ def filter_values(values):
     res = res / 100
     return res
 
+
 def get_mouth_image(mesh, shape):
     mouth = draw_mouth_mask(mesh[:, :2].astype(np.int32), shape)
     mouth = torch.Tensor(mouth[:, :, :1].astype(np.float32).transpose((2, 0, 1)))
@@ -490,7 +491,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", default='config/vox-256.yaml', help="path to config")
     parser.add_argument("--checkpoint", default='', help="path to checkpoint to restore")
     parser.add_argument("--checkpoint_headmodel", default='', help="path to headmodel checkpoint to restore")
-    parser.add_argument("--checkpoint_posemodel", default='/home/server25/minyeong_workspace/fv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
+    parser.add_argument("--checkpoint_posemodel", default='/root/workspace/BFv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
     
     parser.add_argument("--reference_dict", default='mesh_dict_reference.pt', help="path to reference dict to restore")
 
@@ -548,6 +549,7 @@ if __name__ == "__main__":
     section_indices = []
     for sec in sections:
         section_indices.extend(sec[0])
+    print(f'len section indices: {len(section_indices)}')
     section_mouth = sections[-1][0]
     
     if len(opt.driving_video) > 0:
@@ -605,6 +607,8 @@ if __name__ == "__main__":
     else:
         print("Using Pre-driven Data...")
         source_mesh = torch.load(os.path.join(opt.driven_dir, 'result', 'source_mesh.pt'))
+        raw_mesh = L * (source_mesh['raw_value'] - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
+        source_mesh['mesh_img_sec'] = get_mesh_image_section(raw_mesh, frame_shape, section_indices)
         driven_meshes = torch.load(os.path.join(opt.driven_dir, 'result', 'driven_meshes.pt'))
         for driven_mesh in driven_meshes:
             mesh = {}
@@ -612,6 +616,7 @@ if __name__ == "__main__":
             mesh['_value'] = driven_mesh['value']
             mesh['value'] = torch.tensor(source_mesh['value'])
             mesh['raw_value'] = driven_mesh['raw_value']
+            mesh['fake_raw_value'] = driven_mesh['fake_raw_value']
             mesh['R'] = driven_mesh['R']
             mesh['c'] = driven_mesh['c']
             mesh['t'] = driven_mesh['t']
@@ -625,7 +630,7 @@ if __name__ == "__main__":
             # mesh['t'] = source_mesh['t'].cpu()
             
             # driven_mesh['driven_sections'][:-len(section_mouth)] = torch.tensor(mesh['value'][section_indices][:-len(section_mouth)])
-            mesh['value'][section_indices] = driven_mesh['driven_sections']
+            mesh['value'][section_indices] = driven_mesh['driven_sections'][:len(section_indices)]
             # print(f'delta mesh check: {(driven_mesh["driven_sections"].cpu() - source_mesh["value"][section_indices].cpu()).norm()}')
             target_mesh = (1 / source_mesh['c'][None, None]) * torch.einsum('ij,nj->ni', source_mesh['R'].inverse(), driven_mesh['driven_sections'].cpu() - source_mesh['t'][None, :, 0])
             target_mesh = L * (target_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
@@ -648,10 +653,14 @@ if __name__ == "__main__":
         # print('msh img sec got')
         raw_mesh = L * (raw_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
 
+        fake_raw_mesh = mesh['fake_raw_value']
+        fake_raw_mesh = L * (fake_raw_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
+        print(f"mesh difference: {(source_mesh['value'] - mesh['value'])[section_indices]}")
+        mesh['fake_mesh_img'] = torch.from_numpy((get_mesh_image(fake_raw_mesh, frame_shape)[:, :, [0]] / 255.0).transpose((2, 0, 1))).float()
         # mesh['mouth_img'] = get_mouth_image(raw_mesh.numpy(),  frame_shape)
         mesh['mesh_img_sec'] = get_mesh_image_section(raw_mesh, frame_shape, section_indices)
         # print(f'mouth image shape: {mesh["mouth_img"].shape}')
-        target_meshes.append(raw_mesh[section_indices])
+        target_meshes.append(fake_raw_mesh[section_indices])
         # mesh['raw_value'] = np.array(raw_mesh, dtype='float32') * 2 / L + np.squeeze(A, axis=-1)[None]
         
 
@@ -679,8 +688,8 @@ if __name__ == "__main__":
         mesh = target_meshes[i]
         # print(f'frame type: {img_as_ubyte(frame).dtype}')
         frame = np.ascontiguousarray(img_as_ubyte(frame))
-        meshed_frame = draw_section(mesh[:, :2].numpy().astype(np.int32), frame_shape, mask=frame)
-        # meshed_frame = frame
+        # meshed_frame = draw_section(mesh[:, :2].numpy().astype(np.int32), frame_shape, mask=frame)
+        meshed_frame = frame
         # meshed_frame = (255 * driving_meshes[i]['mouth_img'].repeat(3, 1, 1).permute(1, 2, 0)).numpy().astype(np.int32)
         meshed_frames.append(meshed_frame)
 

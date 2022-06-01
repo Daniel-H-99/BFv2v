@@ -55,7 +55,7 @@ class Logger:
         if generator is not None:
             ckpt = generator.state_dict()
             # for k, v in checkpoint['generator'].items():
-            #     if ('dense_motion_network.hourglass' not in k) and ('dense_motion_network.mask' not in k) and ('dense_motion_network.occlusion' not in k):
+            #     if 'dense_motion_network' not in k:
             #         if k in ckpt:
             #             ckpt[k] = v
 
@@ -82,7 +82,7 @@ class Logger:
         if optimizer_discriminator is not None:
             try:
                 optimizer_discriminator.load_state_dict(checkpoint['optimizer_discriminator'])
-            except RuntimeError as e:
+            except Exception as e:
                 print ('No discriminator optimizer in the state-dict. Optimizer will be not initialized')
         
         if optimizer_kp_detector is not None:
