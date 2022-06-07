@@ -342,7 +342,7 @@ class FramesDataset(Dataset):
             self.transform = None
             
     def __len__(self):
-        return len(self.videos) // 2
+        return len(self.videos) // 3
 
     def split_section(self, X):
         res = []

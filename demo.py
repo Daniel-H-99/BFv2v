@@ -29,7 +29,7 @@ import math
 if sys.version_info[0] < 3:
     raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 def load_checkpoints(config, checkpoint_path, checkpoint_headmodel_path, checkpoint_posemodel_path, gen, cpu=False):
 
@@ -491,7 +491,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", default='config/vox-256.yaml', help="path to config")
     parser.add_argument("--checkpoint", default='', help="path to checkpoint to restore")
     parser.add_argument("--checkpoint_headmodel", default='', help="path to headmodel checkpoint to restore")
-    parser.add_argument("--checkpoint_posemodel", default='/root/workspace/BFv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
+    parser.add_argument("--checkpoint_posemodel", default='/home/ubuntu/workspace/BFv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
     
     parser.add_argument("--reference_dict", default='mesh_dict_reference.pt', help="path to reference dict to restore")
 

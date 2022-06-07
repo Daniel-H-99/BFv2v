@@ -248,11 +248,11 @@ class DenseMotionNetwork(nn.Module):
         # coords_src = coords_src + kp_source['he_t'].unsqueeze(1)
         coords_src = torch.einsum('bij,bnj->bni', kp_source['R'].inverse() / kp_source['c'].unsqueeze(1).unsqueeze(2), coords_src - kp_source['t'].squeeze(2).unsqueeze(1)) # B x N x 3
         
-        # bias_drv = kp_driving['he_bias']
-        # coords_drv = coords_drv - bias_drv.unsqueeze(1)  # B x N x 3
-        # coords_drv = torch.einsum('bij,bnj->bni', kp_driving['he_R'] / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv) # B x N x 3
-        # coords_drv = coords_drv + kp_driving['he_t'].unsqueeze(1)
-        coords_drv = torch.einsum('bij,bnj->bni', kp_driving['R'].inverse() / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv - kp_driving['t'].squeeze(2).unsqueeze(1)) # B x N x 3
+        bias_drv = kp_driving['he_bias']
+        coords_drv = coords_drv - bias_drv.unsqueeze(1)  # B x N x 3
+        coords_drv = torch.einsum('bij,bnj->bni', kp_driving['he_R'] / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv) # B x N x 3
+        coords_drv = coords_drv + kp_driving['he_t'].unsqueeze(1)
+        # coords_drv = torch.einsum('bij,bnj->bni', kp_driving['R'].inverse() / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv - kp_driving['t'].squeeze(2).unsqueeze(1)) # B x N x 3
 
 
 
