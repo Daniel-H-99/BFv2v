@@ -158,4 +158,4 @@ dependencies:
     - widgetsnbextension==3.5.2
     - xlrd==2.0.1
     - zipp==3.7.0
-prefix: /home/server25/anaconda3/envs/fom
+prefix: /home/ubuntu/anaconda3/envs/fom

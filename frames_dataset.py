@@ -104,7 +104,7 @@ class SingleVideoDataset(Dataset):
     def __init__(self, video_path, frame_shape=(256, 256, 3)):
         self.video_path = video_path
         self.frame_shape = tuple(frame_shape)
-        self.reference_dict = torch.load('/home/server25/minyeong_workspace/BFv2v/mesh_dict_reference.pt')
+        self.reference_dict = torch.load('mesh_dict_reference.pt')
         self.frames = read_video(self.video_path, frame_shape) # L x H x W x 3
         
     def __len__(self):
@@ -315,7 +315,7 @@ class FramesDataset(Dataset):
         self.id_sampling = id_sampling
         self.reference_dict = torch.load('mesh_dict_reference.pt')
         if os.path.exists(os.path.join(root_dir, 'train')):
-            assert os.path.exists(os.path.join(root_dir, 'test'))
+            # assert os.path.exists(os.path.join(root_dir, 'test'))
             print("Use predefined train-test split.")
             if id_sampling:
                 train_videos = {os.path.basename(video).split('#')[0] for video in
@@ -323,7 +323,7 @@ class FramesDataset(Dataset):
                 train_videos = list(train_videos)
             else:
                 train_videos = os.listdir(os.path.join(root_dir, 'train'))
-            test_videos = os.listdir(os.path.join(root_dir, 'test'))
+            # test_videos = os.listdir(os.path.join(root_dir, 'test'))
             self.root_dir = os.path.join(self.root_dir, 'train' if is_train else 'test')
         else:
             print("Use random train-test split.")
@@ -342,7 +342,7 @@ class FramesDataset(Dataset):
             self.transform = None
             
     def __len__(self):
-        return len(self.videos) // 2
+        return len(self.videos) // 3
 
     def split_section(self, X):
         res = []
@@ -451,6 +451,11 @@ class FramesDataset(Dataset):
                 target_mesh = L * (target_mesh - np.squeeze(A, axis=-1)[None]) // 2
                 drv_mesh['fake_mesh_img'] = (get_mesh_image(target_mesh, self.frame_shape)[:, :, [0]] / 255.0).transpose((2, 0, 1))
 
+<<<<<<< HEAD
+=======
+                # drv_mesh['intermediate_mesh_img_sec'] = self.get_mesh_image_section(target_mesh)
+                
+>>>>>>> a3f842d9c540e094d41883e5420257752a521610
                 break
             except Exception as e:
                 print(f'error: {e}')

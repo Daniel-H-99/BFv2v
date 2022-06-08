@@ -27,7 +27,11 @@ if __name__ == "__main__":
     
     if sys.version_info[0] < 3:
         raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
+<<<<<<< HEAD
     os.environ['CUDA_VISIBLE_DEVICES']='1,2'
+=======
+    os.environ['CUDA_VISIBLE_DEVICES']='0,1,2,3'
+>>>>>>> a3f842d9c540e094d41883e5420257752a521610
     parser = ArgumentParser()
     parser.add_argument("--config", default="config/vox-256.yaml", help="path to config")
     parser.add_argument("--mode", default="train", choices=["train",])
@@ -37,7 +41,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_headmodel", default=None, help="path to checkpoint to restore")
     parser.add_argument("--checkpoint_posemodel", default='/home/server25/minyeong_workspace/fv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
     
-    parser.add_argument("--device_ids", default="0,1", type=lambda x: list(map(int, x.split(','))),
+    parser.add_argument("--device_ids", default="0,1,2,3", type=lambda x: list(map(int, x.split(','))),
                         help="Names of the devices comma separated.")
     parser.add_argument("--verbose", dest="verbose", action="store_true", help="Print model architecture")
     parser.set_defaults(verbose=False)

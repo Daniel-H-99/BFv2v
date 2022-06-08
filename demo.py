@@ -21,7 +21,11 @@ from modules.keypoint_detector import KPDetector, HEEstimator
 from animate import normalize_kp
 from scipy.spatial import ConvexHull
 from modules.headmodel import HeadModel
+<<<<<<< HEAD
 from utils.util import extract_mesh, draw_section, draw_mouth_mask, get_mesh_image, matrix2euler, euler2matrix
+=======
+from utils.util import extract_mesh, draw_section, draw_mouth_mask, matrix2euler, euler2matrix, get_mesh_image
+>>>>>>> a3f842d9c540e094d41883e5420257752a521610
 from utils.one_euro_filter import OneEuroFilter
 import cv2
 import math
@@ -365,6 +369,7 @@ def filter_values(values):
     res = res / 100
     return res
 
+
 def get_mouth_image(mesh, shape):
     mouth = draw_mouth_mask(mesh[:, :2].astype(np.int32), shape)
     mouth = torch.Tensor(mouth[:, :, :1].astype(np.float32).transpose((2, 0, 1)))
@@ -490,7 +495,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", default='config/vox-256.yaml', help="path to config")
     parser.add_argument("--checkpoint", default='', help="path to checkpoint to restore")
     parser.add_argument("--checkpoint_headmodel", default='', help="path to headmodel checkpoint to restore")
-    parser.add_argument("--checkpoint_posemodel", default='/home/server25/minyeong_workspace/fv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
+    parser.add_argument("--checkpoint_posemodel", default='/home/ubuntu/workspace/BFv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
     
     parser.add_argument("--reference_dict", default='mesh_dict_reference.pt', help="path to reference dict to restore")
 
@@ -548,6 +553,7 @@ if __name__ == "__main__":
     section_indices = []
     for sec in sections:
         section_indices.extend(sec[0])
+    print(f'len section indices: {len(section_indices)}')
     section_mouth = sections[-1][0]
     
     if len(opt.driving_video) > 0:
@@ -653,11 +659,15 @@ if __name__ == "__main__":
 
         fake_raw_mesh = mesh['fake_raw_value']
         fake_raw_mesh = L * (fake_raw_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
+<<<<<<< HEAD
+=======
+        print(f"mesh difference: {(source_mesh['value'] - mesh['value'])[section_indices]}")
+>>>>>>> a3f842d9c540e094d41883e5420257752a521610
         mesh['fake_mesh_img'] = torch.from_numpy((get_mesh_image(fake_raw_mesh, frame_shape)[:, :, [0]] / 255.0).transpose((2, 0, 1))).float()
         # mesh['mouth_img'] = get_mouth_image(raw_mesh.numpy(),  frame_shape)
         mesh['mesh_img_sec'] = get_mesh_image_section(raw_mesh, frame_shape, section_indices)
         # print(f'mouth image shape: {mesh["mouth_img"].shape}')
-        target_meshes.append(raw_mesh[section_indices])
+        target_meshes.append(fake_raw_mesh[section_indices])
         # mesh['raw_value'] = np.array(raw_mesh, dtype='float32') * 2 / L + np.squeeze(A, axis=-1)[None]
         
 
