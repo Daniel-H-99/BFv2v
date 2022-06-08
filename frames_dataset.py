@@ -451,11 +451,6 @@ class FramesDataset(Dataset):
                 target_mesh = L * (target_mesh - np.squeeze(A, axis=-1)[None]) // 2
                 drv_mesh['fake_mesh_img'] = (get_mesh_image(target_mesh, self.frame_shape)[:, :, [0]] / 255.0).transpose((2, 0, 1))
 
-<<<<<<< HEAD
-=======
-                # drv_mesh['intermediate_mesh_img_sec'] = self.get_mesh_image_section(target_mesh)
-                
->>>>>>> a3f842d9c540e094d41883e5420257752a521610
                 break
             except Exception as e:
                 print(f'error: {e}')

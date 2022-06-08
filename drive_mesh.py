@@ -207,7 +207,7 @@ if __name__ == "__main__":
     parser.add_argument("--gen", default="spade", choices=["original", "spade"])
     parser.add_argument("--log_dir", default='log_headmodel', help="path to log into")
     parser.add_argument("--checkpoint", required=True, help="path to checkpoint to restore")
-    parser.add_argument("--checkpoint_posemodel", default='/home/ubuntu/workspace/BFv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
+    parser.add_argument("--checkpoint_posemodel", default='/home/server25/minyeong_workspace/BFv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
     
     parser.add_argument("--device_ids", default="0", type=lambda x: list(map(int, x.split(','))),
                         help="Names of the devices comma separated.")

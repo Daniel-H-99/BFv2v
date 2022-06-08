@@ -21,11 +21,7 @@ from modules.keypoint_detector import KPDetector, HEEstimator
 from animate import normalize_kp
 from scipy.spatial import ConvexHull
 from modules.headmodel import HeadModel
-<<<<<<< HEAD
 from utils.util import extract_mesh, draw_section, draw_mouth_mask, get_mesh_image, matrix2euler, euler2matrix
-=======
-from utils.util import extract_mesh, draw_section, draw_mouth_mask, matrix2euler, euler2matrix, get_mesh_image
->>>>>>> a3f842d9c540e094d41883e5420257752a521610
 from utils.one_euro_filter import OneEuroFilter
 import cv2
 import math
@@ -659,10 +655,6 @@ if __name__ == "__main__":
 
         fake_raw_mesh = mesh['fake_raw_value']
         fake_raw_mesh = L * (fake_raw_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
-<<<<<<< HEAD
-=======
-        print(f"mesh difference: {(source_mesh['value'] - mesh['value'])[section_indices]}")
->>>>>>> a3f842d9c540e094d41883e5420257752a521610
         mesh['fake_mesh_img'] = torch.from_numpy((get_mesh_image(fake_raw_mesh, frame_shape)[:, :, [0]] / 255.0).transpose((2, 0, 1))).float()
         # mesh['mouth_img'] = get_mouth_image(raw_mesh.numpy(),  frame_shape)
         mesh['mesh_img_sec'] = get_mesh_image_section(raw_mesh, frame_shape, section_indices)

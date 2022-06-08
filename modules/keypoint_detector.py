@@ -89,11 +89,7 @@ class HEEstimator(nn.Module):
 
     def __init__(self, block_expansion, feature_channel, num_kp, image_channel, max_features, num_bins=66, estimate_jacobian=True, sections=None, headmodel_sections=None):
         super(HEEstimator, self).__init__()
-<<<<<<< HEAD
-        num_kp=15
-=======
         num_kp = 15
->>>>>>> a3f842d9c540e094d41883e5420257752a521610
         self.conv1 = nn.Conv2d(in_channels=image_channel, out_channels=block_expansion, kernel_size=7, padding=3, stride=2)
         self.norm1 = BatchNorm2d(block_expansion, affine=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)

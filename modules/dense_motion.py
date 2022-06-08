@@ -290,13 +290,8 @@ class DenseMotionNetwork(nn.Module):
         input = input.view(bs, -1, d, h, w)
 
         if 'mesh_img_sec' in kp_source:
-<<<<<<< HEAD
             print(f'mesh_img_section exists')
             mesh_img = kp_driving['fake_mesh_img']
-=======
-            print(f'he mesh_img_section exists')
-            mesh_img = kp_driving['mesh_img_sec']
->>>>>>> a3f842d9c540e094d41883e5420257752a521610
             if input.shape[3] != mesh_img.shape[3] or input.shape[4] != mesh_img.shape[4]:
                 mesh_img = F.interpolate(mesh_img, size=input.shape[3:], mode='bilinear')
             mesh_img = mesh_img.unsqueeze(2).repeat(1, 1, d, 1, 1)
