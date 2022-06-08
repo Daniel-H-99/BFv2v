@@ -203,9 +203,10 @@ class FramesDataset2(Dataset):
         # mesh: N0 x 3
         sections = self.concat_section(self.split_section(mesh))
         # print(f'sections shape: {sections.shape}')
-        secs = draw_section(sections[:, :2].astype(np.int32), self.frame_shape, split=True) # (num_sections) x H x W x 3
+        secs = draw_section(sections[:, :2].astype(np.int32), self.frame_shape, split=False) # (num_sections) x H x W x 3
         # print(f'draw section done')
-        secs = [sec[:, :, :1].astype(np.float32).transpose((2, 0, 1)) / 255.0 for sec in secs]
+        secs = sec[:, :, :1].astype(np.float32).transpose((2, 0, 1)) / 255.0
+        # secs = [sec[:, :, :1].astype(np.float32).transpose((2, 0, 1)) / 255.0 for sec in secs]
         # print('got mesh image sections')
         return secs
             
@@ -363,14 +364,15 @@ class FramesDataset(Dataset):
     def get_mesh_image_section(self, mesh):
         # mesh: N0 x 3
         # print(f'mesh type: {mesh.type()}')
-        mouth_mask = (255 * draw_mouth_mask(mesh[:, :2].numpy().astype(np.int32), self.frame_shape)).astype(np.int32)
+        # mouth_mask = (255 * draw_mouth_mask(mesh[:, :2].numpy().astype(np.int32), self.frame_shape)).astype(np.int32)
         # print(f'mouth mask shape {mouth_mask.type()}')
         sections = self.concat_section(self.split_section(mesh))
         # print(f'sections shape: {sections.shape}')
         
-        secs = draw_section(sections[:, :2].astype(np.int32), self.frame_shape, split=True, mask=mouth_mask) # (num_sections) x H x W x 3
+        secs = draw_section(sections[:, :2].astype(np.int32), self.frame_shape, split=False) # (num_sections) x H x W x 3
         # print(f'draw section done')
-        secs = [sec[:, :, :1].astype(np.float32).transpose((2, 0, 1)) / 255.0 for sec in secs]
+        secs = secs[:, :, :1].astype(np.float32).transpose((2, 0, 1)) / 255.0
+        # secs = [sec[:, :, :1].astype(np.float32).transpose((2, 0, 1)) / 255.0 for sec in secs]
         # print('got mesh image sections')
         return secs
             
@@ -445,11 +447,10 @@ class FramesDataset(Dataset):
                 ### Make intermediate target mesh ###
                 src_mesh = meshes[0]
                 drv_mesh = meshes[1]
-                target_mesh = (1 / src_mesh['c'][np.newaxis, np.newaxis]) * np.einsum('ij,nj->ni', np.linalg.inv(src_mesh['R']), drv_mesh['value'] - src_mesh['t'][np.newaxis, :, 0])
-                # drv_mesh['intermediate_value'] = target_mesh
+                target_mesh = (1 / drv_mesh['c'][np.newaxis, np.newaxis]) * np.einsum('ij,nj->ni', np.linalg.inv(drv_mesh['R']), src_mesh['value'] - drv_mesh['t'][np.newaxis, :, 0])
                 target_mesh = L * (target_mesh - np.squeeze(A, axis=-1)[None]) // 2
-                # drv_mesh['intermediate_mesh_img_sec'] = self.get_mesh_image_section(target_mesh)
-                
+                drv_mesh['fake_mesh_img'] = (get_mesh_image(target_mesh, self.frame_shape)[:, :, [0]] / 255.0).transpose((2, 0, 1))
+
                 break
             except Exception as e:
                 print(f'error: {e}')

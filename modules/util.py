@@ -34,7 +34,7 @@ def get_rotation_matrix(yaw, pitch, roll):
                          torch.zeros_like(roll), torch.zeros_like(roll), torch.ones_like(roll)], dim=1)
     roll_mat = roll_mat.view(roll_mat.shape[0], 3, 3)
 
-    rot_mat = torch.einsum('bij,bjk,bkm->bim', pitch_mat.inverse(), yaw_mat, roll_mat)
+    rot_mat = torch.einsum('bij,bjk,bkm->bim', pitch_mat, yaw_mat, roll_mat)
 
     return rot_mat
 

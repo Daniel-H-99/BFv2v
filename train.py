@@ -28,7 +28,7 @@ def train(config, generator, discriminator, kp_detector, he_estimator, checkpoin
     if checkpoint is not None:
         start_epoch = Logger.load_cpk(checkpoint, generator, discriminator, None, None, None, 
                                       optimizer_generator, optimizer_discriminator)
-        # start_epoch = 0
+        start_epoch = 0
     else:
         start_epoch = 0
 

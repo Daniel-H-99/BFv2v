@@ -60,7 +60,7 @@ def filter_values(values):
     res = res
     return res
 
-def denormalize(he_estimator, mesh, img, reference_info, bias=None, is_src=False):
+def denormalize(he_estimator, mesh, img, reference_info, src_value=None, bias=None, is_src=False):
         # target pose
         print(f'img shape {img.shape}')
         with torch.no_grad():
@@ -71,10 +71,12 @@ def denormalize(he_estimator, mesh, img, reference_info, bias=None, is_src=False
         if bias is None:
             bias = mesh['t'].squeeze(1) + mesh['c'] * mesh['R'] @ t.detach().cpu() # 3
             bias = bias.detach().cpu()
+        else:
+            bias = mesh['c'] * aux['he_t'].detach().cpu() # 3
         mesh['he_bias'] = bias
         centered_value = value.cuda() - bias.unsqueeze(0).cuda()  # N x 3
         if not is_src:
-            R_tilda = R.matmul(aux['he_R'].inverse()) # 3 x 3
+            R_tilda = R # 3 x 3
         else:
             R_tilda = mesh['R'].inverse()
         # t = torch.cat([t[:2], t[[2]] - 0.1], dim=0)
@@ -82,6 +84,12 @@ def denormalize(he_estimator, mesh, img, reference_info, bias=None, is_src=False
         frontalized_value = (1 / mesh['c']) * torch.einsum('mp,kp->km', R_tilda.cuda(), centered_value)
         trans_value = frontalized_value + t[None]
         mesh['he_raw_value'] = trans_value.detach().cpu()
+
+        if src_value is not None:
+            centered_src_value = src_value.cuda() - bias.unsqueeze(0).cuda()
+            frontalized_src_value = (1 / mesh['c']) * torch.einsum('mp,kp->km', R_tilda.cuda(), centered_src_value)
+            trans_src_value = frontalized_src_value + t[None]
+            mesh['fake_raw_value'] = trans_src_value.detach().cpu()
         
         
             
@@ -131,7 +139,7 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
     
     source_mesh_dict = {}
     for k in src_data['mesh'].keys():
-        source_mesh_dict[k] = src_data['mesh'][k][0].detach().cpu()
+        source_mesh_dict[k] = torch.tensor(src_data['mesh'][k][0]).detach().cpu()
     source_mesh_dict['he_value'] = source_mesh_dict['value']
     denormalize(he_estimator, source_mesh_dict, src_data['frame'].cuda(), reference_info, is_src=True)
 
@@ -159,21 +167,22 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
         src_frame = draw_section(src_mesh[:, :2].astype('int32'), config['dataset_params']['frame_shape'])
 
         source_mesh = src_data['mesh']
-        driven_full_mesh = source_mesh['value'][0].detach().cpu()
+        driven_full_mesh = torch.tensor(source_mesh['value'][0]).detach().cpu()
         driven_full_mesh[section_indices] = driven.detach().cpu()
         
         driving_frames.append(driving_frame)
         src_frames.append(src_frame)
         driven_mesh_dict = {}
         for k in drv_data['mesh'].keys():
-            driven_mesh_dict[k] = drv_data['mesh'][k][0].detach().cpu()
+            driven_mesh_dict[k] = torch.tensor(drv_data['mesh'][k][0]).detach().cpu()
         driven_mesh_dict['c'] = source_mesh_dict['c']
         driven_mesh_dict['driven_sections'] = driven.detach().cpu()
         driven_mesh_dict['he_value'] = driven_full_mesh
-        denormalize(he_estimator, driven_mesh_dict, drv_data['frame'].cuda(), reference_info, bias=source_mesh_dict['he_bias'])
+        denormalize(he_estimator, driven_mesh_dict, drv_data['frame'].cuda(), reference_info, bias=source_mesh_dict['he_bias'], src_value=source_mesh_dict['value'])
         driven_meshes.append(driven_mesh_dict)
         driven_frame = draw_section((config['dataset_params']['frame_shape'][0] * (driven_mesh_dict['he_raw_value'].numpy() - A)[section_indices, :2] // 2).astype(np.int32), config['dataset_params']['frame_shape'])
         driven_frames.append(driven_frame)
+        # print(f'mesh difference: {driven_mesh_dict["driven_sections"] - source_mesh_dict["value"][section_indices]}')
         
     src_raw_mesh = config['dataset_params']['frame_shape'][0] * (model.module.concat_section(model.module.split_section(src_data['mesh']['value'])).detach().cpu().numpy()[0] + 1) // 2 
     src_raw_frame = draw_section(src_raw_mesh[:, :2].astype('int32'), config['dataset_params']['frame_shape'])
@@ -232,7 +241,7 @@ if __name__ == "__main__":
     
     src_dataset = SingleImageDataset(opt.src_img, frame_shape=config['dataset_params']['frame_shape'])
     drv_dataset = SingleVideoDataset(opt.drv_vid, frame_shape=config['dataset_params']['frame_shape'])
-    ref_path = '/home/server25/minyeong_workspace/BFv2v/frame_reference.png'
+    ref_path = 'frame_reference.png'
     reference_dataset = SingleImageDataset(ref_path)
     
     model = HeadModel(config['train_params']).cuda()

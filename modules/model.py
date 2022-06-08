@@ -633,7 +633,7 @@ class GeneratorFullModel(torch.nn.Module):
             motion_section = motion_section.squeeze(4).squeeze(3).transpose(1,2) # B x N x 3
             # print(f'motion Gt size {motion_GT.shape}')
             # print(f'motion size {motion_section.shape}')
-            loss_values['motion_match'] = self.loss_weights['motion_match'] * F.l1_loss(self.concat_section(self.split_section(motion_section)), self.concat_section(self.split_section(motion_GT)))
+            loss_values['motion_match'] = self.loss_weights['motion_match'] * F.l1_loss(motion_section, motion_GT)
 
         if self.loss_weights['coefs_match'] != 0:
             motion = generated['move'] # B x D x H x W x 3
@@ -681,8 +681,8 @@ class GeneratorFullModel(torch.nn.Module):
             loss_values['perceptual'] = value_total
 
         if self.loss_weights['generator_gan'] != 0:
-            pyramide_real = self.pyramid_cond(torch.cat([kp_driving['mesh_img'].cuda(), x['driving']], dim=1))
-            pyramide_generated = self.pyramid_cond(torch.cat([kp_driving['mesh_img'].cuda(), generated['prediction']], dim=1))
+            pyramide_real = self.pyramid_cond(torch.cat([kp_driving['mesh_img_sec'].cuda(), x['driving']], dim=1))
+            pyramide_generated = self.pyramid_cond(torch.cat([kp_driving['mesh_img_sec'].cuda(), generated['prediction']], dim=1))
             discriminator_maps_generated = self.discriminator(pyramide_generated)
             discriminator_maps_real = self.discriminator(pyramide_real)
             
@@ -827,8 +827,8 @@ class DiscriminatorFullModel(torch.nn.Module):
         # pyramide_real = self.pyramid(x['driving'])
         # pyramide_generated = self.pyramid(generated['prediction'].detach())
 
-        pyramide_real = self.pyramid(torch.cat([x['driving_mesh']['mesh_img'].cuda(), x['driving']], dim=1))
-        pyramide_generated = self.pyramid(torch.cat([x['source_mesh']['mesh_img'].cuda(), generated['prediction'].detach()], dim=1))
+        pyramide_real = self.pyramid(torch.cat([x['driving_mesh']['mesh_img_sec'].cuda(), x['driving']], dim=1))
+        pyramide_generated = self.pyramid(torch.cat([x['driving_mesh']['mesh_img_sec'].cuda(), generated['prediction'].detach()], dim=1))
         
         discriminator_maps_generated = self.discriminator(pyramide_generated)
         discriminator_maps_real = self.discriminator(pyramide_real)

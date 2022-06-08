@@ -55,12 +55,8 @@ class DenseMotionNetwork(nn.Module):
             self.prior_extractors.append(nn.Sequential(
                 nn.Linear(3 * len(sec[0]), 256),
                 # nn.LayerNorm([256]),
-                nn.Dropout(p=0.3),
-                nn.Tanh(),
-                nn.Linear(256, 256),
-                # nn.LayerNorm([256]),
-                nn.Dropout(p=0.3),
-                nn.Tanh(),
+                # nn.Dropout(p=0.3),
+                nn.ReLU(),
                 nn.Linear(256, 3 * sec[1]),
                 nn.Tanh()
             ))
@@ -257,9 +253,7 @@ class DenseMotionNetwork(nn.Module):
         coords_drv = torch.einsum('bij,bnj->bni', kp_driving['he_R'] / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv) # B x N x 3
         coords_drv = coords_drv + kp_driving['he_t'].unsqueeze(1)
         # coords_drv = torch.einsum('bij,bnj->bni', kp_driving['R'].inverse() / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv - kp_driving['t'].squeeze(2).unsqueeze(1)) # B x N x 3
-
-
-
+# 
         return {'src': coords_src, 'drv': coords_drv, 'src_normed': src_normed, 'drv_normed': drv_normed}         
         
 
@@ -295,15 +289,15 @@ class DenseMotionNetwork(nn.Module):
            
         input = input.view(bs, -1, d, h, w)
 
-        if 'mesh_img_sec' in kp_driving:
-            print(f'he mesh_img_section exists')
-            mesh_img = kp_driving['mesh_img_sec'][2]
+        if 'mesh_img_sec' in kp_source:
+            print(f'mesh_img_section exists')
+            mesh_img = kp_driving['fake_mesh_img']
             if input.shape[3] != mesh_img.shape[3] or input.shape[4] != mesh_img.shape[4]:
                 mesh_img = F.interpolate(mesh_img, size=input.shape[3:], mode='bilinear')
             mesh_img = mesh_img.unsqueeze(2).repeat(1, 1, d, 1, 1)
-            input = torch.cat([torch.zeros_like(mesh_img), input], dim=1)
+            input = torch.cat([mesh_img, input], dim=1)
         else:
-            print(f'mouth img not exists')
+            print(f'mesh img sec not exists')
             
         # input = deformed_feature.view(bs, -1, d, h, w)      # (bs, num_kp+1 * c, d, h, w)
 
