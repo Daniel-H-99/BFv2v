@@ -69,7 +69,8 @@ def denormalize(he_estimator, mesh, img, reference_info, src_value=None, bias=No
         value = mesh['he_value'] # N x 3
         aux = reference_info
         if bias is None:
-            bias = mesh['t'].squeeze(1) + mesh['c'] * mesh['R'] @ t.detach().cpu() # 3
+            # bias = mesh['t'].squeeze(1) + mesh['c'] * mesh['R'] @ t.detach().cpu() # 3
+            bias = aux['he_t']
             bias = bias.detach().cpu()
         else:
             bias = mesh['c'] * aux['he_t'].detach().cpu() # 3
@@ -81,6 +82,7 @@ def denormalize(he_estimator, mesh, img, reference_info, src_value=None, bias=No
             R_tilda = mesh['R'].inverse()
         # t = torch.cat([t[:2], t[[2]] - 0.1], dim=0)
         mesh['he_R'], mesh['he_t'] = R_tilda.detach().cpu(), t.detach().cpu()
+        mesh['centered_value'] = centered_value.detach().cpu()
         frontalized_value = (1 / mesh['c']) * torch.einsum('mp,kp->km', R_tilda.cuda(), centered_value)
         trans_value = frontalized_value + t[None]
         mesh['he_raw_value'] = trans_value.detach().cpu()

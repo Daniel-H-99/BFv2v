@@ -279,7 +279,7 @@ def draw_mask(maskKp, shape, c=(255, 255, 255)):
   mask = mask.astype(np.float32) / 255.0
   return mask
 
-def draw_section(sections, shape, section_config=[LEFT_EYE_IDX, LEFT_EYEBROW_IDX, RIGHT_EYE_IDX, RIGHT_EYEBROW_IDX, OUT_LIP_IDX, IN_LIP_IDX, (CHIN_IDX, False)], groups=[0, 0, 1, 1, 2, 2, 2], split=False, mask=None):
+def draw_section(sections, shape, section_config=[LEFT_EYE_IDX, LEFT_EYEBROW_IDX, RIGHT_EYE_IDX, RIGHT_EYEBROW_IDX, OUT_LIP_IDX, IN_LIP_IDX], groups=[0, 0, 1, 1, 2, 2], split=False, mask=None):
 
     # sections: np
     if mask is None:
@@ -318,7 +318,7 @@ def draw_section(sections, shape, section_config=[LEFT_EYE_IDX, LEFT_EYEBROW_IDX
         #     [0, 0]], np.int32)
         _ = cv2.polylines(sec_mask, [section], is_closed, (255, 255, 255), 1)
         
-    assert len(sections) == 0
+    # assert len(sections) == 0
     
     return mask if not split else masks
 

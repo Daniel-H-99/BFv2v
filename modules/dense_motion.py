@@ -71,6 +71,8 @@ class DenseMotionNetwork(nn.Module):
         headmodel_sections = torch.cat(headmodel_sections, dim=0)
         
         for i, sec in enumerate(self.sections):
+            if len(headmodel_sections) < 3 * len(sec[0]):
+                headmodel_sections = torch.zeros(3 * len(sec[0])).to(headmodel_sections.device)
             headmodel_section = headmodel_sections[:3 * len(sec[0])]
             headmodel_sections = headmodel_sections[3 * len(sec[0]):]
             self.register_buffer(f'headmodel_mu_x_{i}', headmodel_section)
@@ -248,11 +250,11 @@ class DenseMotionNetwork(nn.Module):
         # coords_src = coords_src + kp_source['he_t'].unsqueeze(1)
         coords_src = torch.einsum('bij,bnj->bni', kp_source['R'].inverse() / kp_source['c'].unsqueeze(1).unsqueeze(2), coords_src - kp_source['t'].squeeze(2).unsqueeze(1)) # B x N x 3
         
-        bias_drv = kp_driving['he_bias']
-        coords_drv = coords_drv - bias_drv.unsqueeze(1)  # B x N x 3
-        coords_drv = torch.einsum('bij,bnj->bni', kp_driving['he_R'] / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv) # B x N x 3
-        coords_drv = coords_drv + kp_driving['he_t'].unsqueeze(1)
-        # coords_drv = torch.einsum('bij,bnj->bni', kp_driving['R'].inverse() / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv - kp_driving['t'].squeeze(2).unsqueeze(1)) # B x N x 3
+        # bias_drv = kp_driving['he_bias']
+        # coords_drv = coords_drv - bias_drv.unsqueeze(1)  # B x N x 3
+        # coords_drv = torch.einsum('bij,bnj->bni', kp_driving['he_R'] / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv) # B x N x 3
+        # coords_drv = coords_drv + kp_driving['he_t'].unsqueeze(1)
+        coords_drv = torch.einsum('bij,bnj->bni', kp_driving['R'].inverse() / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv - kp_driving['t'].squeeze(2).unsqueeze(1)) # B x N x 3
 # 
         return {'src': coords_src, 'drv': coords_drv, 'src_normed': src_normed, 'drv_normed': drv_normed}         
         
@@ -291,7 +293,7 @@ class DenseMotionNetwork(nn.Module):
 
         if 'mesh_img_sec' in kp_source:
             print(f'mesh_img_section exists')
-            mesh_img = kp_driving['fake_mesh_img']
+            mesh_img = kp_driving['mesh_img_sec']
             if input.shape[3] != mesh_img.shape[3] or input.shape[4] != mesh_img.shape[4]:
                 mesh_img = F.interpolate(mesh_img, size=input.shape[3:], mode='bilinear')
             mesh_img = mesh_img.unsqueeze(2).repeat(1, 1, d, 1, 1)

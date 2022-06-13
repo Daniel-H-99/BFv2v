@@ -319,6 +319,8 @@ def find_best_frame(source, driving, cpu=False):
 def adapt_values(origin, values, minimum=None, maximum=None, scale=None, center_align=False, center=None):
     # origin: float
     # values: tensor of size L
+    if scale is None:
+        scale = 1
     sample_min, sample_max, sample_mean = values.min(), values.max(), values.mean()
     if (minimum is not None) and (maximum is not None):
         scale = min(scale, 1 / (sample_max - sample_min).clamp(min=1e-6))
@@ -326,7 +328,10 @@ def adapt_values(origin, values, minimum=None, maximum=None, scale=None, center_
         origin = sample_mean
     if center is not None:
         origin = center
-    inter_values = origin + scale * torch.tanh(values - sample_mean)
+
+    # print(f'types: {origin.shape} {type(values)} {type(sample_mean)}')
+    inter_values = origin + scale * (values - sample_mean)
+    # inter_values = origin + scale * tanh(values - sample_mean)
     inter_min, inter_max = inter_values.min(), inter_values.max()
     adapted_values = inter_values
     
@@ -382,74 +387,89 @@ def filter_mesh(meshes, source_mesh):
     t_zs = []
     
     for i, mesh in enumerate(meshes):
-        R, t, c = mesh['R'], mesh['t'], mesh['c']
+        R, t, c = mesh['he_R'], mesh['he_t'], mesh['c']
         R_x, R_y, R_z = matrix2euler(R.numpy())
         # t_center = t - R @ t
-        # t_x, t_y, t_z = t_center.squeeze(1)
+        t_x, t_y, t_z = t
         R_xs.append(R_x)
         R_ys.append(R_y)
         R_zs.append(R_z)
+        t_xs.append(t_x)
+        t_ys.append(t_y)
+        t_zs.append(t_z)
     
     R_xs = torch.tensor(R_xs).float()
     R_ys = torch.tensor(R_ys).float()
     R_zs = torch.tensor(R_zs).float()
     
-    R_x_source, R_y_source, R_z_source = matrix2euler(source_mesh['R'].numpy())
+    R_x_source, R_y_source, R_z_source = matrix2euler(source_mesh['he_R'].numpy())
     
-    R_xs_adapted = adapt_values(R_x_source, R_xs, scale=(math.pi / 6), center_align=True)
-    R_ys_adapted = adapt_values(R_y_source, R_ys, scale=(math.pi / 6), minimum=(-math.pi / 2), maximum=(math.pi / 2), center_align=True)
-    R_zs_adapted = adapt_values(R_z_source, R_zs, scale=(math.pi / 6), minimum=(-math.pi / 4), maximum=(math.pi / 4), center_align=True)
+    R_xs_adapted = adapt_values(R_x_source, R_xs, minimum=(-math.pi / 4), maximum=(math.pi / 4), center_align=True)
+    R_ys_adapted = adapt_values(R_y_source, R_ys, minimum=(-math.pi / 2), maximum=(math.pi / 2), center_align=True)
+    R_zs_adapted = adapt_values(R_z_source, R_zs, minimum=(-math.pi / 2), maximum=(math.pi / 2), center_align=True)
     
     
     # R_xs_adapted = R_xs
     # R_ys_adapted = R_ys
     # R_zs_adapted = R_zs
     
-    R_xs_adapted = torch.tensor(R_x_source)[None].repeat(len(R_xs))
-    R_ys_adapted = torch.tensor(R_y_source)[None].repeat(len(R_ys))
-    R_zs_adapted = torch.tensor(R_z_source)[None].repeat(len(R_zs))
+    # R_xs_adapted = torch.tensor(R_x_source)[None].repeat(len(R_xs))
+    # R_ys_adapted = torch.tensor(R_y_source)[None].repeat(len(R_ys))
+    # R_zs_adapted = torch.tensor(R_z_source)[None].repeat(len(R_zs))
     
     R_xs_filtered = torch.tensor(filter_values(R_xs_adapted.numpy())).float()
     R_ys_filtered = torch.tensor(filter_values(R_ys_adapted.numpy())).float()
     R_zs_filtered = torch.tensor(filter_values(R_zs_adapted.numpy())).float()
     
-    # R_src, t_src = source_mesh['R'], source_mesh['t']
-    # source_mesh['t'] = 
-    Rs = []
-    for R_x, R_y, R_z, mesh in zip(R_xs_filtered, R_ys_filtered, R_zs_filtered, meshes):
-        R, t = mesh['R'], mesh['t']
-        new_R = torch.tensor(euler2matrix([R_x, R_y, R_z])).float()
-        Rs.append(new_R)
-        mesh['R'] = new_R 
-        t_center = new_R.inverse() @ R @ t
-        # print(f't shape: {t.shape}')
-        t_x, t_y, t_z = t_center.squeeze(1)
-        t_xs.append(t_x)
-        t_ys.append(t_y)
-        t_zs.append(t_z)
-    
-    Rs = torch.stack(Rs, dim=0)
-    
     t_xs = torch.tensor(t_xs).float()
     t_ys = torch.tensor(t_ys).float()
     t_zs = torch.tensor(t_zs).float()
     
-    t_x_source, t_y_source, t_z_source = source_mesh['t'].squeeze(1)
+    t_x_source, t_y_source, t_z_source = source_mesh['he_t']
     
-    t_stack_raw = torch.stack([t_xs, t_ys, t_zs], dim=1)
-    rot_raw = torch.einsum('bij,bj->bi', Rs.inverse(), t_stack_raw / source_mesh['c'])
+    t_xs_adapted = adapt_values(t_x_source, t_xs, minimum=-0.75, maximum=0.75, center_align=True)
+    t_ys_adapted = adapt_values(t_y_source, t_ys, minimum=-0.75, maximum=0.75, center_align=True)
+    t_zs_adapted = adapt_values(t_z_source, t_zs, center_align=True)
     
-    source_bias = torch.einsum('ij,jp->ip', source_mesh['R'].inverse(), - source_mesh['t'] / source_mesh['c']).squeeze(1)
     
-    # rot_raw = rot_raw + 0.2 * (rot_raw - source_bias[None])
+    t_xs_filtered = torch.tensor(filter_values(t_xs_adapted.numpy())).float()
+    t_ys_filtered = torch.tensor(filter_values(t_ys_adapted.numpy())).float()
+    t_zs_filtered = torch.tensor(filter_values(t_zs_adapted.numpy())).float()
     
-    t_xs_rot_raw = rot_raw[:, 0]
-    t_ys_rot_raw = rot_raw[:, 1]
-    t_zs_rot_raw = rot_raw[:, 2]
+    for R_x, R_y, R_z, t_x, t_y, t_z, mesh in zip(R_xs_filtered, R_ys_filtered, R_zs_filtered, t_xs_filtered, t_ys_filtered, t_zs_filtered, meshes):
+        new_R = torch.tensor(euler2matrix([R_x, R_y, R_z])).float()
+        new_t = torch.stack([t_x, t_y, t_z], dim=0).float()
+        mesh['he_R'] = new_R 
+        mesh['he_t'] = new_t
+        # t_center = new_R.inverse() @ R @ t
+        # # print(f't shape: {t.shape}')
+        # t_x, t_y, t_z = t_center.squeeze(1)
+        # t_xs.append(t_x)
+        # t_ys.append(t_y)
+        # t_zs.append(t_z)
     
-    t_xs_adapted = adapt_values(t_xs_rot_raw, t_xs_rot_raw, scale=0.5, center_align=False, center=0)
-    t_ys_adapted = adapt_values(t_ys_rot_raw, t_ys_rot_raw, scale=0.5, center_align=False, center=0)
-    t_zs_adapted = adapt_values(t_zs_rot_raw, t_zs_rot_raw, scale=0.5, center_align=False, center=-0.05)
+    # Rs = torch.stack(Rs, dim=0)
+    
+    # t_xs = torch.tensor(t_xs).float()
+    # t_ys = torch.tensor(t_ys).float()
+    # t_zs = torch.tensor(t_zs).float()
+    
+    # t_x_source, t_y_source, t_z_source = source_mesh['t'].squeeze(1)
+    
+    # t_stack_raw = torch.stack([t_xs, t_ys, t_zs], dim=1)
+    # rot_raw = torch.einsum('bij,bj->bi', Rs.inverse(), t_stack_raw / source_mesh['c'])
+    
+    # source_bias = torch.einsum('ij,jp->ip', source_mesh['R'].inverse(), - source_mesh['t'] / source_mesh['c']).squeeze(1)
+    
+    # # rot_raw = rot_raw + 0.2 * (rot_raw - source_bias[None])
+    
+    # t_xs_rot_raw = rot_raw[:, 0]
+    # t_ys_rot_raw = rot_raw[:, 1]
+    # t_zs_rot_raw = rot_raw[:, 2]
+    
+    # t_xs_adapted = adapt_values(t_xs_rot_raw, t_xs_rot_raw, scale=0.5, center_align=False, center=0)
+    # t_ys_adapted = adapt_values(t_ys_rot_raw, t_ys_rot_raw, scale=0.5, center_align=False, center=0)
+    # t_zs_adapted = adapt_values(t_zs_rot_raw, t_zs_rot_raw, scale=0.5, center_align=False, center=-0.05)
 
     
     # t_xs_rot_filtered = torch.tensor(filter_values(t_xs_adapted.numpy())).float()
@@ -464,21 +484,21 @@ def filter_mesh(meshes, source_mesh):
     # t_zs_filtered = t_stack_filtered[:, 2]
     
 
-    t_xs_adapted = t_x_source[None].repeat(len(t_xs))
-    t_ys_adapted = t_y_source[None].repeat(len(t_ys))
-    t_zs_adapted = t_z_source[None].repeat(len(t_zs))
+    # t_xs_adapted = t_x_source[None].repeat(len(t_xs))
+    # t_ys_adapted = t_y_source[None].repeat(len(t_ys))
+    # t_zs_adapted = t_z_source[None].repeat(len(t_zs))
     
-    t_xs_filtered = t_xs_adapted
-    t_ys_filtered = t_ys_adapted
-    t_zs_filtered = t_zs_adapted
+    # t_xs_filtered = t_xs_adapted
+    # t_ys_filtered = t_ys_adapted
+    # t_zs_filtered = t_zs_adapted
     
-    for t_x, t_y, t_z, mesh in zip(t_xs_filtered, t_ys_filtered, t_zs_filtered, meshes):
-        # t_x, t_y, t_z = mesh['t'].squeeze(1)
-        new_t = torch.tensor([torch.tensor(t_x), torch.tensor(t_y), torch.tensor(t_z)]).unsqueeze(1)
-        # new_t = source_mesh['t']
-        # print(f'delta t: {new_t - mesh["t"]}')
-        mesh['t'] = new_t
-        mesh['c'] = source_mesh['c']
+    # for t_x, t_y, t_z, mesh in zip(t_xs_filtered, t_ys_filtered, t_zs_filtered, meshes):
+    #     # t_x, t_y, t_z = mesh['t'].squeeze(1)
+    #     new_t = torch.tensor([torch.tensor(t_x), torch.tensor(t_y), torch.tensor(t_z)]).unsqueeze(1)
+    #     # new_t = source_mesh['t']
+    #     # print(f'delta t: {new_t - mesh["t"]}')
+    #     mesh['t'] = new_t
+    #     mesh['c'] = source_mesh['c']
     
     # t_stack = torch.stack([t_xs_filtered, t_ys_filtered, t_zs_filtered], dim=1)
     # rot = torch.einsum('bij,bj->bi', Rs.inverse(), t_stack / source_mesh['c'])
@@ -615,6 +635,7 @@ if __name__ == "__main__":
 
             mesh['_value'] = driven_mesh['value']
             mesh['value'] = torch.tensor(source_mesh['value'])
+            mesh['centered_value'] = driven_mesh['centered_value']
             mesh['raw_value'] = driven_mesh['raw_value']
             mesh['fake_raw_value'] = driven_mesh['fake_raw_value']
             mesh['R'] = driven_mesh['R']
@@ -645,21 +666,28 @@ if __name__ == "__main__":
 
 
     # use one euro filter for denoising
-    # filter_mesh(driving_meshes, source_mesh)
+    filter_mesh(driving_meshes, source_mesh)
     target_meshes = []
     for mesh in driving_meshes:
+        R_tilda, t = mesh['he_R'], mesh['he_t']
+        centered_value = mesh['centered_value']
+        frontalized_value = (1 / mesh['c']) * torch.einsum('mp,kp->km', R_tilda, centered_value)
+        trans_value = frontalized_value + t[None]
+        mesh['he_raw_value'] = trans_value.detach()
+        
         raw_mesh = mesh['he_raw_value']
         # raw_mesh = (1 / mesh['c'][None, None]) * torch.einsum('ij,nj->ni', mesh['R'].inverse(), mesh['value'].cpu() - mesh['t'][None, :, 0])
         # print('msh img sec got')
         raw_mesh = L * (raw_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
 
-        fake_raw_mesh = mesh['fake_raw_value']
-        fake_raw_mesh = L * (fake_raw_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
-        mesh['fake_mesh_img'] = torch.from_numpy((get_mesh_image(fake_raw_mesh, frame_shape)[:, :, [0]] / 255.0).transpose((2, 0, 1))).float()
+        # fake_raw_mesh = mesh['fake_raw_value']
+        # fake_raw_mesh = L * (fake_raw_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2
+        # mesh['fake_mesh_img'] = torch.from_numpy((get_mesh_image(fake_raw_mesh, frame_shape)[:, :, [0]] / 255.0).transpose((2, 0, 1))).float()
+        
         # mesh['mouth_img'] = get_mouth_image(raw_mesh.numpy(),  frame_shape)
         mesh['mesh_img_sec'] = get_mesh_image_section(raw_mesh, frame_shape, section_indices)
         # print(f'mouth image shape: {mesh["mouth_img"].shape}')
-        target_meshes.append(fake_raw_mesh[section_indices])
+        target_meshes.append(raw_mesh[section_indices])
         # mesh['raw_value'] = np.array(raw_mesh, dtype='float32') * 2 / L + np.squeeze(A, axis=-1)[None]
         
 
