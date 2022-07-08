@@ -511,7 +511,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", default='config/vox-256.yaml', help="path to config")
     parser.add_argument("--checkpoint", default='', help="path to checkpoint to restore")
     parser.add_argument("--checkpoint_headmodel", default='', help="path to headmodel checkpoint to restore")
-    parser.add_argument("--checkpoint_posemodel", default='/home/ubuntu/workspace/BFv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
+    parser.add_argument("--checkpoint_posemodel", default='/home/ubuntu/workspace/fv2v/ckpt/headpose.tar', help="path to he_estimator checkpoint")
     
     parser.add_argument("--reference_dict", default='mesh_dict_reference.pt', help="path to reference dict to restore")
 
@@ -634,7 +634,8 @@ if __name__ == "__main__":
             mesh = {}
 
             mesh['_value'] = driven_mesh['value']
-            mesh['value'] = torch.tensor(source_mesh['value'])
+            mesh['value'] = driven_mesh['he_value']
+            # mesh['value'] = torch.tensor(source_mesh['value'])
             mesh['centered_value'] = driven_mesh['centered_value']
             mesh['raw_value'] = driven_mesh['raw_value']
             mesh['fake_raw_value'] = driven_mesh['fake_raw_value']
@@ -651,7 +652,7 @@ if __name__ == "__main__":
             # mesh['t'] = source_mesh['t'].cpu()
             
             # driven_mesh['driven_sections'][:-len(section_mouth)] = torch.tensor(mesh['value'][section_indices][:-len(section_mouth)])
-            mesh['value'][section_indices] = driven_mesh['driven_sections'][:len(section_indices)]
+            # mesh['value'][section_indices] = driven_mesh['driven_sections'][:len(section_indices)]
             # print(f'delta mesh check: {(driven_mesh["driven_sections"].cpu() - source_mesh["value"][section_indices].cpu()).norm()}')
             target_mesh = (1 / source_mesh['c'][None, None]) * torch.einsum('ij,nj->ni', source_mesh['R'].inverse(), driven_mesh['driven_sections'].cpu() - source_mesh['t'][None, :, 0])
             target_mesh = L * (target_mesh - torch.from_numpy(np.squeeze(A, axis=-1)[None])) // 2

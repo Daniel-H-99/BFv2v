@@ -96,10 +96,14 @@ def denormalize(he_estimator, mesh, img, reference_info, src_value=None, bias=No
         
             
 def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_estimator=None, reference_dataset=None):
+    FIX_IDX_LEN = 52
     train_params = config['train_params']    
     section_indices = []
-    for sec in model.module.sections:
+    fix_indices = []
+    for i, sec in enumerate(model.module.sections):
         section_indices.extend(sec[0])
+    FIX_IDX_LEN = len(section_indices)
+    fix_indices = section_indices[:FIX_IDX_LEN]
         
     src_dataloader = DataLoader(src_dataset, batch_size=1, shuffle=False, num_workers=0, drop_last=False)
     drv_sample_dataloader = DataLoader(drv_dataset, batch_size=(10 * train_params['batch_size']), shuffle=False, num_workers=0, drop_last=False)
@@ -110,10 +114,13 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
     
     # load reference info
     ref_img_data = iter(DataLoader(reference_dataset, batch_size=1, shuffle=False, num_workers=0, drop_last=False)).next()
-    with torch.no_grad():
-        he_ref = he_estimator(ref_img_data['frame'].cuda())
+    # with torch.no_grad():
+    he_ref = he_estimator(ref_img_data['frame'].cuda())
     reference_info = {'R': ref_img_data['mesh']['R'][0].cuda(), 't': ref_img_data['mesh']['t'][0].cuda(), 'c': ref_img_data['mesh']['c'][0].cuda(), 'he_R': he_ref['R'][0].cuda(), 'he_t': he_ref['t'][0].cuda(), 'img': ref_img_data['frame'][0].permute(1, 2, 0).cuda()}
     
+    model.module.center_normalize_mesh(drv_data['mesh'])
+    model.module.center_normalize_mesh(src_data['mesh'])
+
     with torch.no_grad():
         params_drv = model.module.estimate_params(drv_data)  # x: (num_sections) x N * 3, e: (num_sections) x B x N * 3, k_e: (num_sections) x N * 3
         x_drv, e_drv, k_e_drv = params_drv['x'], params_drv['e'], params_drv['k_e']
@@ -126,7 +133,20 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
         # params_src = model.module.estimate_params(src_data)
         # params_src = model.module.estimate_params(src_data)  # x: (num_sections) x N * 3, e: (num_sections) x B x N * 3, k_e: (num_sections) x N * 3
         x_src, e_src, k_e_src = params_src['x'], params_src['e'], params_src['k_e']
-        
+        e_key = [e_drv_sec / k_e_drv[i][None] * k_e_src[i][None] for i, e_drv_sec in enumerate(e_drv)]
+
+        sims = []
+        for q, k in  zip(e_src, e_key):
+            # q: N x 3, k: N x 3
+            print(f'q, k shape: {q.shape}, {k.shape}')
+            sims.append((k @ q.t()).squeeze(1))
+        score = torch.stack(sims, dim=1).sum(dim=1)
+        best_idx = score.argmax()
+        mean_bias = []
+        for m in drv_data['mesh']['means']:
+            mean_bias.append(m[[best_idx]][None])
+        # print(f'meean_bias: {mean_bias}')
+        # exit(0)
     driving_frames = []
     driven_frames = []
     src_frames = []
@@ -140,15 +160,21 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
     times = np.linspace(0, num_frames / fps, num_frames)
     
     source_mesh_dict = {}
+    src_data = iter(src_dataloader).next()
+
     for k in src_data['mesh'].keys():
         source_mesh_dict[k] = torch.tensor(src_data['mesh'][k][0]).detach().cpu()
     source_mesh_dict['he_value'] = source_mesh_dict['value']
     denormalize(he_estimator, source_mesh_dict, src_data['frame'].cuda(), reference_info, is_src=True)
 
-    
+    model.module.center_normalize_mesh(src_data['mesh'])
+
     for i, drv_data in enumerate(tqdm(drv_dataloader)):
+        model.module.center_normalize_mesh(drv_data['mesh'])
         with torch.no_grad():
-            src, drv, driven = model.module.drive(drv_data, x_src, k_e_src, x_drv=x_drv, k_e_drv=k_e_drv)
+            src, drv, driven = model.module.drive(drv_data, x_src, k_e_src, x_drv=x_drv, k_e_drv=k_e_drv, means=src_data['mesh']['means'], means_2=mean_bias)
+            # src, drv, driven = model.module.drive(drv_data, x_src, k_e_src, x_drv=x_drv, k_e_drv=k_e_drv)
+            # model.module.decenter_mesh(driven, src_data['mesh']['means'])
         A = np.array([-1, -1, 1 / 2]).astype('float32')[np.newaxis]
         driven_mesh = config['dataset_params']['frame_shape'][0] * (driven.detach().cpu().numpy() - A) // 2   # total_section_values x 3
 
@@ -167,6 +193,11 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
         driving_frame = draw_section(driving_mesh[:, :2].astype('int32'), config['dataset_params']['frame_shape'])
         src_mesh = config['dataset_params']['frame_shape'][0] * (src.detach().cpu().numpy() - A) // 2   # total_section_values x 3
         src_frame = draw_section(src_mesh[:, :2].astype('int32'), config['dataset_params']['frame_shape'])
+
+        # if i == 0:
+        #     fixed_value = driven[:len(fix_indices)]
+        # else:
+        #     driven[:len(fix_indices)] = fixed_value
 
         source_mesh = src_data['mesh']
         driven_full_mesh = torch.tensor(source_mesh['value'][0]).detach().cpu()
@@ -202,14 +233,14 @@ if __name__ == "__main__":
     print('running')
     if sys.version_info[0] < 3:
         raise Exception("You must use Python 3 or higher. Recommended version is Python 3.7")
-    os.environ['CUDA_VISIBLE_DEVICES']='1'
+    os.environ['CUDA_VISIBLE_DEVICES']='0'
     parser = ArgumentParser()
     parser.add_argument("--config", default=None, help="path to config")
     parser.add_argument("--mode", default="train", choices=["train",])
     parser.add_argument("--gen", default="spade", choices=["original", "spade"])
     parser.add_argument("--log_dir", default='log_headmodel', help="path to log into")
     parser.add_argument("--checkpoint", required=True, help="path to checkpoint to restore")
-    parser.add_argument("--checkpoint_posemodel", default='/home/server25/minyeong_workspace/BFv2v/ckpt/00000189-checkpoint.pth.tar', help="path to he_estimator checkpoint")
+    parser.add_argument("--checkpoint_posemodel", default='/home/server25/minyeong_workspace/fv2v/ckpt/headpose.tar', help="path to he_estimator checkpoint")
     
     parser.add_argument("--device_ids", default="0", type=lambda x: list(map(int, x.split(','))),
                         help="Names of the devices comma separated.")
@@ -256,7 +287,7 @@ if __name__ == "__main__":
                                **config['model_params']['common_params'])
 
     if torch.cuda.is_available():
-        he_estimator.to(opt.device_ids[0])
+        he_estimator.cuda()
 
     ckpt = torch.load(opt.checkpoint_posemodel)
     he_estimator.load_state_dict(ckpt['he_estimator'])

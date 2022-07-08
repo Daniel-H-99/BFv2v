@@ -77,8 +77,8 @@ class SingleImageDataset(Dataset):
         return 1
 
     def __getitem__(self, idx):
-        frame = cv2.resize(img_as_float32(io.imread(self.image_path)), self.frame_shape[:2])
-        
+        frame = cv2.resize(img_as_float32(cv2.imread(self.image_path)), self.frame_shape[:2])
+        print(f'frame shape: {frame.shape}')
         L = self.frame_shape[0]
         mesh = extract_mesh(img_as_ubyte(frame), self.reference_dict) # {value (N x 3), R (3 x 3), t(3 x 1), c1}
         A = np.array([-1, -1, 1 / 2], dtype='float32')[:, np.newaxis] # 3 x 1
@@ -180,7 +180,7 @@ class FramesDataset2(Dataset):
             self.transform = None
 
     def __len__(self):
-        return len(self.ids)
+        return len(self.ids) // 100
 
     def split_section(self, X):
         res = []
@@ -342,7 +342,7 @@ class FramesDataset(Dataset):
             self.transform = None
             
     def __len__(self):
-        return len(self.videos) // 3
+        return len(self.videos) // 100
 
     def split_section(self, X):
         res = []
