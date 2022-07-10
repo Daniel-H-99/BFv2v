@@ -160,7 +160,7 @@ def process_video(args):
 if __name__ == "__main__":
     parser = ArgumentParser()
 
-    parser.add_argument("--image_shape", default=(256, 256), type=lambda x: tuple(map(int, x.split(','))),
+    parser.add_argument("--image_shape", default=(224, 224), type=lambda x: tuple(map(int, x.split(','))),
                         help="Image shape")
     parser.add_argument("--increase", default=0.1, type=float, help='Increase bbox by this amount')
     parser.add_argument("--iou_with_initial", type=float, default=0.25, help="The minimal allowed iou with inital bbox")

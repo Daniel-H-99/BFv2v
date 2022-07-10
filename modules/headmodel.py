@@ -389,7 +389,7 @@ class HeadModel(nn.Module):
         return loss_values, generated
         
         
-    def estimate_params_section_v3(self, x, R_src, R, e_normalized, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err, num_kp, threshold=None):
+    def estimate_params_section_v3(self, x, R_src, R, e_normalized, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err, num_kp, threshold=None, var_coef=1):
         # x: B x N * 3   
         
         assert x is not None
@@ -439,7 +439,8 @@ class HeadModel(nn.Module):
         mu_x_i = sigma_x_i.matmul(A_star_x_i.transpose(1, 2).matmul(sigma_err_i.inverse()).matmul(B_star_x_i) + A_tilda_x_i.transpose(1, 2).matmul(B_tilda_x_i))
         sigma_x_total = sigma_x_i.inverse().sum(dim=0).inverse()
         mu_x_total = sigma_x_total.matmul(sigma_x_i.inverse().matmul(mu_x_i).sum(dim=0))
-        sigma_x_final = (sigma_x_total.inverse() / num_items + 1000000 * torch.eye(num_pc).cuda()).inverse()
+        
+        sigma_x_final = (sigma_x_total.inverse() / num_items + var_coef * torch.eye(num_pc).cuda()).inverse()
         mu_x_final = sigma_x_final.matmul(sigma_x_total.inverse().matmul(mu_x_total) / num_items)
         sigma_x_src = sigma_x_final 
         mu_x_src = mu_x_final
@@ -550,7 +551,7 @@ class HeadModel(nn.Module):
             s_e = self.getattr(f's_e_{i}')
             sigma_err = self.getattr(f'sigma_err_{i}')
             
-            kp_reg = self.estimate_params_section_v3(sec.flatten(1), kp['R'], drv_data['mesh']['R'], e_normalized[i], self.scalers[i], mu_x, u_x, s_x, u_e, s_e, sigma_err, self.sections[i][1], threshold=threshold)
+            kp_reg = self.estimate_params_section_v3(sec.flatten(1), kp['R'], drv_data['mesh']['R'], e_normalized[i], self.scalers[i], mu_x, u_x, s_x, u_e, s_e, sigma_err, self.sections[i][1], threshold=threshold, var_coef=1 if i + 1 != len(secs) else 10000)
             
             kp_reg_xs.append(kp_reg['x'])   # num_kp * 3
             kp_reg_es.append(kp_reg['e'])   # B x num_kp * 3
@@ -670,7 +671,7 @@ class HeadModel(nn.Module):
         return {'x': kp_reg_xs, 'e': kp_reg_es, 'k_e': k_es}
     
     
-    def estimate_params_section(self, x, R, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err, num_pc):
+    def estimate_params_section(self, x, R, scaler, mu_x, u_x, s_x, u_e, s_e, sigma_err, num_pc, var_coef=1):
         # x: B x N * 3   
         # R: B x 3 x 3
         
@@ -715,7 +716,7 @@ class HeadModel(nn.Module):
         mu_x_i = sigma_x_i.matmul(A_star_x_i.transpose(1, 2).matmul(sigma_err_i.inverse()).matmul(B_star_x_i) + A_tilda_x_i.transpose(1, 2).matmul(B_tilda_x_i))
         sigma_x_total = sigma_x_i.inverse().sum(dim=0).inverse()
         mu_x_total = sigma_x_total.matmul(sigma_x_i.inverse().matmul(mu_x_i).sum(dim=0))
-        sigma_x_final = (sigma_x_total.inverse() / num_items + 10000 * torch.eye(num_pc).cuda()).inverse()
+        sigma_x_final = (sigma_x_total.inverse() / num_items + var_coef * torch.eye(num_pc).cuda()).inverse()
         mu_x_final = sigma_x_final.matmul(sigma_x_total.inverse().matmul(mu_x_total) / num_items)
         
         # sigma_inverse = filter_matrix.transpose(1, 2) @ (torch.eye(A_e.size(0)).cuda() - A_e @ sigma_e @ A_e.t()) @ filter_matrix
@@ -773,7 +774,7 @@ class HeadModel(nn.Module):
             s_e = self.getattr(f's_e_{i}')
             sigma_err = self.getattr(f'sigma_err_{i}')
             
-            kp_reg = self.estimate_params_section(sec.flatten(1), kp['R'], self.scalers[i], mu_x, u_x, s_x, u_e, s_e, sigma_err, self.sections[0][1])
+            kp_reg = self.estimate_params_section(sec.flatten(1), kp['R'], self.scalers[i], mu_x, u_x, s_x, u_e, s_e, sigma_err, self.sections[0][1], var_coef=10000 if i + 1 != len(secs) else 10000)
             
             kp_reg_xs.append(kp_reg['x'])   # num_kp * 3
             kp_reg_es.append(kp_reg['e'])   # B x num_kp * 3
