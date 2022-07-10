@@ -54,12 +54,12 @@ class Logger:
         checkpoint = torch.load(checkpoint_path)
         if generator is not None:
             ckpt = generator.state_dict()
-            for k, v in checkpoint['generator'].items():
-                if 'dense_motion_network' not in k:
-                    if k in ckpt:
-                        ckpt[k] = v
+            # for k, v in checkpoint['generator'].items():
+            #     if 'dense_motion_network' not in k:
+            #         if k in ckpt:
+            #             ckpt[k] = v
 
-            # ckpt.update(checkpoint['generator'])
+            ckpt.update(checkpoint['generator'])
             generator.load_state_dict(ckpt)
         if kp_detector is not None:
             kp_detector.load_state_dict(checkpoint['kp_detector'])
@@ -74,10 +74,10 @@ class Logger:
         if headmodel is not None:
             headmodel.load_state_dict(checkpoint['headmodel'])
             
-        # if optimizer_generator is not None:
-        #     ckpt = optimizer_generator.state_dict()
-        #     ckpt.update(checkpoint['optimizer_generator'])
-        #     optimizer_generator.load_state_dict(ckpt)
+        if optimizer_generator is not None:
+            ckpt = optimizer_generator.state_dict()
+            ckpt.update(checkpoint['optimizer_generator'])
+            optimizer_generator.load_state_dict(ckpt)
             
         if optimizer_discriminator is not None:
             try:

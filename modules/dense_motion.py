@@ -68,12 +68,12 @@ class DenseMotionNetwork(nn.Module):
             if 'mu_x' in k:
                 headmodel_sections.append(v)
                 # print(f'v shape {v.shape}')
-        headmodel_sections = torch.cat(headmodel_sections, dim=0)
+        headmodel_sections = torch.cat(headmodel_sections, dim=0).cpu()
         
         for i, sec in enumerate(self.sections):
             if len(headmodel_sections) < 3 * len(sec[0]):
                 headmodel_sections = torch.zeros(3 * len(sec[0])).to(headmodel_sections.device)
-            headmodel_section = headmodel_sections[:3 * len(sec[0])]
+            headmodel_section = torch.zeros_like(headmodel_sections[:3 * len(sec[0])])
             headmodel_sections = headmodel_sections[3 * len(sec[0]):]
             self.register_buffer(f'headmodel_mu_x_{i}', headmodel_section)
             

@@ -6,3 +6,4 @@ log*/
 *.mp4
 *.png
 asset/
+*.pyc

@@ -118,6 +118,9 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
     he_ref = he_estimator(ref_img_data['frame'].cuda())
     reference_info = {'R': ref_img_data['mesh']['R'][0].cuda(), 't': ref_img_data['mesh']['t'][0].cuda(), 'c': ref_img_data['mesh']['c'][0].cuda(), 'he_R': he_ref['R'][0].cuda(), 'he_t': he_ref['t'][0].cuda(), 'img': ref_img_data['frame'][0].permute(1, 2, 0).cuda()}
     
+    model.module.center_normalize_mesh(drv_data['mesh'])
+    model.module.center_normalize_mesh(src_data['mesh'])
+
     with torch.no_grad():
         params_drv = model.module.estimate_params(drv_data)  # x: (num_sections) x N * 3, e: (num_sections) x B x N * 3, k_e: (num_sections) x N * 3
         x_drv, e_drv, k_e_drv = params_drv['x'], params_drv['e'], params_drv['k_e']
@@ -130,7 +133,20 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
         # params_src = model.module.estimate_params(src_data)
         # params_src = model.module.estimate_params(src_data)  # x: (num_sections) x N * 3, e: (num_sections) x B x N * 3, k_e: (num_sections) x N * 3
         x_src, e_src, k_e_src = params_src['x'], params_src['e'], params_src['k_e']
-        
+        e_key = [e_drv_sec / k_e_drv[i][None] * k_e_src[i][None] for i, e_drv_sec in enumerate(e_drv)]
+
+        sims = []
+        for q, k in  zip(e_src, e_key):
+            # q: N x 3, k: N x 3
+            print(f'q, k shape: {q.shape}, {k.shape}')
+            sims.append((k @ q.t()).squeeze(1))
+        score = torch.stack(sims, dim=1).sum(dim=1)
+        best_idx = score.argmax()
+        mean_bias = []
+        for m in drv_data['mesh']['means']:
+            mean_bias.append(m[[best_idx]][None])
+        # print(f'meean_bias: {mean_bias}')
+        # exit(0)
     driving_frames = []
     driven_frames = []
     src_frames = []
@@ -144,15 +160,21 @@ def main(config, model, res_dir, src_dataset, drv_dataset, threshold=None, he_es
     times = np.linspace(0, num_frames / fps, num_frames)
     
     source_mesh_dict = {}
+    src_data = iter(src_dataloader).next()
+
     for k in src_data['mesh'].keys():
         source_mesh_dict[k] = torch.tensor(src_data['mesh'][k][0]).detach().cpu()
     source_mesh_dict['he_value'] = source_mesh_dict['value']
     denormalize(he_estimator, source_mesh_dict, src_data['frame'].cuda(), reference_info, is_src=True)
 
-    
+    model.module.center_normalize_mesh(src_data['mesh'])
+
     for i, drv_data in enumerate(tqdm(drv_dataloader)):
+        model.module.center_normalize_mesh(drv_data['mesh'])
         with torch.no_grad():
-            src, drv, driven = model.module.drive(drv_data, x_src, k_e_src, x_drv=x_drv, k_e_drv=k_e_drv)
+            src, drv, driven = model.module.drive(drv_data, x_src, k_e_src, x_drv=x_drv, k_e_drv=k_e_drv, means=src_data['mesh']['means'], means_2=mean_bias)
+            # src, drv, driven = model.module.drive(drv_data, x_src, k_e_src, x_drv=x_drv, k_e_drv=k_e_drv)
+            # model.module.decenter_mesh(driven, src_data['mesh']['means'])
         A = np.array([-1, -1, 1 / 2]).astype('float32')[np.newaxis]
         driven_mesh = config['dataset_params']['frame_shape'][0] * (driven.detach().cpu().numpy() - A) // 2   # total_section_values x 3
 
