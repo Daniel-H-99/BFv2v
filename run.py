@@ -8,7 +8,7 @@ from argparse import ArgumentParser
 from time import gmtime, strftime
 from shutil import copy
 
-from frames_dataset import FramesDataset, SingleImageDataset
+from frames_dataset import FramesDataset3, SingleImageDataset
 
 from modules.generator import OcclusionAwareGenerator, OcclusionAwareSPADEGenerator
 from modules.discriminator import MultiScaleDiscriminator
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     if opt.mode == 'train':
         config['train_params']['num_kp'] = config['model_params']['common_params']['num_kp']
         config['train_params']['sections'] = config['model_params']['common_params']['sections']
-        config['train_params']['headmodel_sections'] = config['model_params']['common_params']['headmodel_sections']
+        # config['train_params']['headmodel_sections'] = config['model_params']['common_params']['headmodel_sections']
         
     if opt.checkpoint is not None:
         log_dir = os.path.join(*os.path.split(opt.checkpoint)[:-1])
@@ -59,12 +59,12 @@ if __name__ == "__main__":
         
     
 
-    headmodel = HeadModel(config['train_params']).cuda()
-    headmodel = DataParallelWithCallback(headmodel)
-    ckpt = torch.load(opt.checkpoint_headmodel)
-    headmodel.load_state_dict(ckpt['headmodel'])
-    statistics = headmodel.module.export_statistics()
-    del headmodel
+    # headmodel = HeadModel(config['train_params']).cuda()
+    # headmodel = DataParallelWithCallback(headmodel)
+    # ckpt = torch.load(opt.checkpoint_headmodel)
+    # headmodel.load_state_dict(ckpt['headmodel'])
+    # statistics = headmodel.module.export_statistics()
+    # del headmodel
     
     
     
@@ -74,7 +74,7 @@ if __name__ == "__main__":
                                             **config['model_params']['common_params'])
     elif opt.gen == 'spade':
         generator = OcclusionAwareSPADEGenerator(**config['model_params']['generator_params'],
-                                                 **config['model_params']['common_params'], headmodel=statistics)
+                                                 **config['model_params']['common_params'])
 
     if torch.cuda.is_available():
         print('cuda is available')
@@ -114,7 +114,7 @@ if __name__ == "__main__":
     # he_estimator.eval()
     
     
-    dataset = FramesDataset(is_train=(opt.mode == 'train'), **config['dataset_params'], train_params=config['train_params'])
+    dataset = FramesDataset3(is_train=(opt.mode == 'train'), **config['dataset_params'], train_params=config['train_params'])
     
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)

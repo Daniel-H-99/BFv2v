@@ -61,25 +61,26 @@ class DenseMotionNetwork(nn.Module):
                 nn.Tanh()
             ))
 
-        headmodel_sections = []
-        for k, v in headmodel.items():
-            if k == 'sections':
-                continue
-            if 'mu_x' in k:
-                headmodel_sections.append(v)
-                # print(f'v shape {v.shape}')
-        headmodel_sections = torch.cat(headmodel_sections, dim=0).cpu()
+        # headmodel_sections = []
+        # for k, v in headmodel.items():
+        #     if k == 'sections':
+        #         continue
+        #     if 'mu_x' in k:
+        #         headmodel_sections.append(v)
+        #         # print(f'v shape {v.shape}')
+        # headmodel_sections = torch.cat(headmodel_sections, dim=0).cpu()
         
-        for i, sec in enumerate(self.sections):
-            if len(headmodel_sections) < 3 * len(sec[0]):
-                headmodel_sections = torch.zeros(3 * len(sec[0])).to(headmodel_sections.device)
-            headmodel_section = torch.zeros_like(headmodel_sections[:3 * len(sec[0])])
-            headmodel_sections = headmodel_sections[3 * len(sec[0]):]
-            self.register_buffer(f'headmodel_mu_x_{i}', headmodel_section)
+        # for i, sec in enumerate(self.sections):
+        #     if len(headmodel_sections) < 3 * len(sec[0]):
+        #         headmodel_sections = torch.zeros(3 * len(sec[0])).to(headmodel_sections.device)
+        #     headmodel_section = torch.zeros_like(headmodel_sections[:3 * len(sec[0])])
+        #     headmodel_sections = headmodel_sections[3 * len(sec[0]):]
+        #     self.register_buffer(f'headmodel_mu_x_{i}', headmodel_section)
             
             
     def extract_prior(self, kp, use_intermediate=False):
         mesh = kp['value'] # B x N x 3
+        # print(f'mesh type: {mesh.type()}')
         bs = len(mesh)
         
         priors = []
@@ -87,7 +88,9 @@ class DenseMotionNetwork(nn.Module):
         secs = self.split_section(mesh)
         
         for i, sec in enumerate(secs):
-            sec = sec.flatten(1) - getattr(self, f'headmodel_mu_x_{i}')[None]
+            # sec = sec.flatten(1) - getattr(self, f'headmodel_mu_x_{i}')[None]
+            sec = sec.flatten(1)
+            # print(sec.type())
             prior = self.prior_extractors[i](sec).view(bs, -1, 3) # B x num_prior x 3
             priors.append(prior)
             
@@ -111,8 +114,8 @@ class DenseMotionNetwork(nn.Module):
         # jacobian = (kp_driving['c'] / kp_source['c']).unsqueeze(1).unsqueeze(2) * kp_driving['R'] @ kp_source['R'].inverse() # B x 3 x 3
         # coordinate_grid = torch.einsum('bij,bklmnj->bklmni', jacobian, coordinate_grid)
         
-        coordinate_grid = torch.einsum('b,bklmnj->bklmnj', kp_driving['c'] / kp_source['c'], coordinate_grid)
-        
+        # coordinate_grid = torch.einsum('b,bklmnj->bklmnj', kp_driving['c'] / kp_source['c'], coordinate_grid)
+
         k = coordinate_grid.shape[1]
         
         # if 'jacobian' in kp_driving:
@@ -248,14 +251,25 @@ class DenseMotionNetwork(nn.Module):
         # coords_src = coords_src - bias_src.unsqueeze(1)  # B x N x 3
         # coords_src = torch.einsum('bij,bnj->bni', kp_source['he_R'] / kp_source['c'].unsqueeze(1).unsqueeze(2), coords_src) # B x N x 3
         # coords_src = coords_src + kp_source['he_t'].unsqueeze(1)
-        coords_src = torch.einsum('bij,bnj->bni', kp_source['R'].inverse() / kp_source['c'].unsqueeze(1).unsqueeze(2), coords_src - kp_source['t'].squeeze(2).unsqueeze(1)) # B x N x 3
+        # coords_src = torch.einsum('bij,bnj->bni', kp_source['R'].inverse() / kp_source['c'].unsqueeze(1).unsqueeze(2), coords_src - kp_source['t'].squeeze(2).unsqueeze(1)) # B x N x 3
+        # print(f'source normed shape: {src_normed.shape}')
+        tmp = torch.cat([src_normed, torch.ones(src_normed.shape[0], src_normed.shape[1], 1).cuda() / kp_source['scale'].unsqueeze(1).unsqueeze(2)], dim=2) # B x N x 4
+        # print(f'u shape: {kp_source["U"].shape}')
+        tmp = tmp.matmul(kp_source['U']) # B x N x 4
+        tmp = tmp[:, :, :3] + torch.tensor([0, 0, 0.5]).unsqueeze(0).unsqueeze(1).cuda()
+        coords_src = tmp # B x N x 3
         
-        bias_drv = kp_driving['he_bias']
-        coords_drv = coords_drv - bias_drv.unsqueeze(1)  # B x N x 3
-        coords_drv = torch.einsum('bij,bnj->bni', kp_driving['he_R'] / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv) # B x N x 3
-        coords_drv = coords_drv + kp_driving['he_t'].unsqueeze(1)
-        # coords_drv = torch.einsum('bij,bnj->bni', kp_driving['R'].inverse() / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv - kp_driving['t'].squeeze(2).unsqueeze(1)) # B x N x 3
-# 
+        # bias_drv = kp_driving['he_bias']
+        # coords_drv = coords_drv - bias_drv.unsqueeze(1)  # B x N x 3
+        # coords_drv = torch.einsum('bij,bnj->bni', kp_driving['he_R'] / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv) # B x N x 3
+        # coords_drv = coords_drv + kp_driving['he_t'].unsqueeze(1)
+        # coords_drv = torch.einsum('bij,bnj->bni', kp_driving['R'].inverse() / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv - kp_driving['t'].squeeze(2).unsqueeze(1)) # B x N x 3j->bni', kp_driving['R'].inverse() / kp_driving['c'].unsqueeze(1).unsqueeze(2), coords_drv - kp_driving['t'].squeeze(2).unsqueeze(1)) # B x N x 3
+        
+        tmp = torch.cat([drv_normed, torch.ones(drv_normed.shape[0], drv_normed.shape[1], 1).cuda() / kp_driving['scale'].unsqueeze(1).unsqueeze(2)], dim=2) # B x N x 4
+        tmp = tmp.matmul(kp_driving['U']) # B x N x 4
+        tmp = tmp[:, :, :3] + torch.tensor([0, 0, 0.5]).unsqueeze(0).unsqueeze(1).cuda()
+        coords_drv = tmp # B x N x 3
+
         return {'src': coords_src, 'drv': coords_drv, 'src_normed': src_normed, 'drv_normed': drv_normed}         
         
 
@@ -297,7 +311,7 @@ class DenseMotionNetwork(nn.Module):
             if input.shape[3] != mesh_img.shape[3] or input.shape[4] != mesh_img.shape[4]:
                 mesh_img = F.interpolate(mesh_img, size=input.shape[3:], mode='bilinear')
             mesh_img = mesh_img.unsqueeze(2).repeat(1, 1, d, 1, 1)
-            input = torch.cat([torch.zeros_like(mesh_img), input], dim=1)
+            input = torch.cat([mesh_img, input], dim=1)
         else:
             print(f'mesh img sec not exists')
             

@@ -160,7 +160,7 @@ class SPADEDecoder(nn.Module):
 
 class OcclusionAwareSPADEGenerator(nn.Module):
 
-    def __init__(self, image_channel, feature_channel, num_kp, sections, headmodel_sections, block_expansion, max_features, num_down_blocks, reshape_channel, reshape_depth,
+    def __init__(self, image_channel, feature_channel, num_kp, sections, block_expansion, max_features, num_down_blocks, reshape_channel, reshape_depth,
                  num_resblocks, estimate_occlusion_map=False, dense_motion_params=None, estimate_jacobian=False, ignore_emotion=False, headmodel=None):
         super(OcclusionAwareSPADEGenerator, self).__init__()
 

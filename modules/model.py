@@ -629,10 +629,16 @@ class GeneratorFullModel(torch.nn.Module):
             motion = motion.permute(0, 4, 1, 2, 3) # B x 3 x d x h x w
             it_section = kp_driving['raw_value'] # B x N x 3
             motion_GT = kp_source['raw_value'] # B x N x 3
+            print(f'it section shape: {it_section.shape}')
+            print(f'motion_GT section shape: {motion_GT.shape}')
+            print(f'motion shape: {motion.shape}')
             motion_section = F.grid_sample(motion, it_section[:, :, None, None])
             motion_section = motion_section.squeeze(4).squeeze(3).transpose(1,2) # B x N x 3
             # print(f'motion Gt size {motion_GT.shape}')
             # print(f'motion size {motion_section.shape}')
+            print(f'motion_section: {motion_section}')
+            print(f'motion_section_GT : {motion_GT}')
+            
             loss_values['motion_match'] = self.loss_weights['motion_match'] * F.l1_loss(motion_section, motion_GT)
 
         if self.loss_weights['coefs_match'] != 0:

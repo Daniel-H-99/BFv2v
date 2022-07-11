@@ -18,6 +18,7 @@ from tqdm import tqdm
 import cv2
 from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial.transform import Rotation as R
+import utils.helpers as helpers
 
 def normalized_to_pixel_coordinates(landmark_dict, image_width, image_height):
     def is_valid_normalized_value(value):
@@ -39,6 +40,24 @@ def normalized_to_pixel_coordinates(landmark_dict, image_width, image_height):
         landmark_pixel_coord_dict[idx] = [x_px, y_px, z_px]
     return landmark_pixel_coord_dict
 
+def extract_openface_mesh(image):
+    mesh = {}
+    H, W = image.shape[:2]
+    bb, lm = helpers.get_landmarks_fa(image)
+    lm[:, 1] = H - lm[:, 1]
+    lm_normed_3d, U, Ind = helpers.normalize_mesh(lm, H, W)
+    lm_3d = np.concatenate([lm_normed_3d, np.ones((len(lm_normed_3d), 1))], axis=1) @ U
+    lm_3d = lm_3d[:, :3] + np.array([[H // 2, H // 2, H // 4]])
+    lm_3d = lm_3d.astype(np.uint)
+    scale = H // 2
+    lm_scaled_3d = lm_normed_3d / scale 
+    mesh["raw_value"] = lm_3d.astype(np.float32)
+    mesh["value"] = lm_scaled_3d.astype(np.float32)
+    mesh["U"] = U.astype(np.float32)
+    mesh["scale"] = scale
+
+    return mesh
+    
 def extract_mesh(image, reference_dict):
     # image: RGB, ubyte
     with mp_face_mesh.FaceMesh(
@@ -279,8 +298,14 @@ def draw_mask(maskKp, shape, c=(255, 255, 255)):
   mask = mask.astype(np.float32) / 255.0
   return mask
 
-def draw_section(sections, shape, section_config=[LEFT_EYE_IDX, LEFT_EYEBROW_IDX, RIGHT_EYE_IDX, RIGHT_EYEBROW_IDX, OUT_LIP_IDX, IN_LIP_IDX], groups=[0, 0, 1, 1, 2, 2], split=False, mask=None):
+LEFT_EYE_IDX = []
 
+def draw_section(sections, shape, section_config=[LEFT_EYE_IDX, RIGHT_EYE_IDX, OUT_LIP_IDX, IN_LIP_IDX], groups=[0, 1, 2, 2], split=False, mask=None):
+    LEFT_EYE_IDX = [36, 37, 38, 39, 40, 41]
+    RIGHT_EYE_IDX = [42, 43, 44, 45, 46, 47]
+    OUT_LIP_IDX = [48, 49, 50, 51, 52, 53, 54 ,55, 56, 57, 58, 59]
+    IN_LIP_IDX = [60, 61, 62, 63, 64, 65, 66, 67]
+    section_config = [LEFT_EYE_IDX, RIGHT_EYE_IDX, OUT_LIP_IDX, IN_LIP_IDX]
     # sections: np
     if mask is None:
         mask = np.zeros(shape, dtype=np.uint8)
@@ -305,12 +330,13 @@ def draw_section(sections, shape, section_config=[LEFT_EYE_IDX, LEFT_EYEBROW_IDX
         section = sections[:len(sec_idx)]
         sections = sections[len(sec_idx):]
         
-        if sec_idx == LEFT_EYE_IDX:
-            reorder = list(map(lambda x: LEFT_EYE_IDX.index(x), _LEFT_EYE_IDX))
-            section = section[reorder]
-        if sec_idx == RIGHT_EYE_IDX:
-            reorder = list(map(lambda x: RIGHT_EYE_IDX.index(x), _RIGHT_EYE_IDX))
-            section = section[reorder]
+        # if sec_idx == LEFT_EYE_IDX:
+        #     reorder = list(map(lambda x: LEFT_EYE_IDX.index(x), _LEFT_EYE_IDX))
+        #     section = section[reorder]
+        # if sec_idx == RIGHT_EYE_IDX:
+        #     reorder = list(map(lambda x: RIGHT_EYE_IDX.index(x), _RIGHT_EYE_IDX))
+        #     section = section[reorder]
+        
         # print(f'len sections: {len(sections)}')
         # section = np.array([
         #     [128, 128],

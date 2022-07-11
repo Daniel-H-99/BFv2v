@@ -7,6 +7,7 @@ from scipy.signal import butter, lfilter
 from scipy.signal import find_peaks, peak_widths
 import matplotlib.pyplot as plt
 import face_alignment
+import os
 
 # define a dictionary that maps the indexes of the facial
 # landmarks to specific face regions
@@ -20,16 +21,17 @@ FACIAL_LANDMARKS_IDXS = OrderedDict([
     ("jaw", (0, 17))
 ])
 
-model = eos.morphablemodel.load_model("./share/sfm_shape_3448.bin")
-blendshapes = eos.morphablemodel.load_blendshapes("./share/expression_blendshapes_3448.bin")
+# print(f"directory {os.listdir('.')}")
+model = eos.morphablemodel.load_model("./utils/share/sfm_shape_3448.bin")
+blendshapes = eos.morphablemodel.load_blendshapes("./utils/share/expression_blendshapes_3448.bin")
 morphablemodel_with_expressions = eos.morphablemodel.MorphableModel(model.get_shape_model(), blendshapes,
                                                                         color_model=eos.morphablemodel.PcaModel(),
                                                                         vertex_definitions=None,
                                                                         texture_coordinates=model.get_texture_coordinates())
-landmark_mapper = eos.core.LandmarkMapper('./share/ibug_to_sfm.txt')
-edge_topology = eos.morphablemodel.load_edge_topology('./share/sfm_3448_edge_topology.json')
-contour_landmarks = eos.fitting.ContourLandmarks.load('./share/ibug_to_sfm.txt')
-model_contour = eos.fitting.ModelContour.load('./share/sfm_model_contours.json')
+landmark_mapper = eos.core.LandmarkMapper('./utils/share/ibug_to_sfm.txt')
+edge_topology = eos.morphablemodel.load_edge_topology('./utils/share/sfm_3448_edge_topology.json')
+contour_landmarks = eos.fitting.ContourLandmarks.load('./utils/share/ibug_to_sfm.txt')
+model_contour = eos.fitting.ModelContour.load('./utils/share/sfm_model_contours.json')
 landmark_ids = list(map(str, range(1, 69))) # generates the numbers 1 to 68, as strings
 
 fa = face_alignment.FaceAlignment(face_alignment.LandmarksType._2D, flip_input=False, device='cuda')
@@ -203,7 +205,7 @@ def normalize_mesh(landmarks, image_height, image_width):
 
     w2, h2 = image_width/2, image_height/2
     viewport = np.array([[w2, 0, 0, w2],
-                        [0, h2*(-1), 0, h2],
+                        [0, h2, 0, h2],
                         [0, 0, 0.5, 0.5],
                         [0, 0, 0, 1]])
     proj = pose.get_projection()
@@ -243,12 +245,12 @@ def normalize_mesh(landmarks, image_height, image_width):
     rotation_angle = pose.get_rotation_euler_angles()
 
     landmarks_3d = np.concatenate([landmarks - np.array([[w2, h2]]), mesh_3d_points[Ind, 2:]], axis=1)
-    print(f'view port: {viewport}')
-    print(f'projection: {proj}')
-    print(f'view: {view}')
+    # print(f'view port: {viewport}')
+    # print(f'projection: {proj}')
+    # print(f'view: {view}')
     normalized_landmarks_3d = (((landmarks_3d @ np.linalg.inv(viewport.T))[:, :3] + np.array([[1, 1, 0]])) @ np.linalg.inv(proj[:3, :3].T) - np.ones((1, 3)) * view[:3, -1:].T) @ np.linalg.inv(view.T[:3, :3])
-    print(f'normed mesh: {mesh_3d_points}')
-    # normalized_landmarks_3d = normalized_landmarks_3d[:, :3]
+    # print(f'normed mesh: {mesh_3d_points}')
+    normalized_landmarks_3d = normalized_landmarks_3d[:, :3]
 
     return normalized_landmarks_3d, a, Ind
     
